@@ -55,7 +55,7 @@ func infoCmd() *cobra.Command {
 	}
 }
 
-// reportLead parses the lead from r and prints its fields.
+// reportLead parses the lead and preface from r and prints their fields.
 func reportLead(out io.Writer, name string, r io.Reader) error {
 	lead, err := zchunk.ReadLead(r)
 	if err != nil {
@@ -69,7 +69,30 @@ func reportLead(out io.Writer, name string, r io.Reader) error {
 	fmt.Fprintf(out, "  checksum type: %s\n", checksumName(lead.ChecksumType))
 	fmt.Fprintf(out, "  header size:   %d bytes\n", lead.HeaderSize)
 	fmt.Fprintf(out, "  header cksum:  %x\n", lead.HeaderChecksum)
+
+	pre, err := zchunk.ReadPreface(r, lead.ChecksumType)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "  compression:   %s\n", compressionName(pre.CompressionType))
+	fmt.Fprintf(out, "  flags:         %#x (streams=%t optional=%t uncompressed=%t)\n",
+		pre.Flags, pre.HasDataStreams(), pre.HasOptionalElements(), pre.UncompressedSource())
+	fmt.Fprintf(out, "  data cksum:    %x\n", pre.DataChecksum)
+	if n := len(pre.OptionalElements); n > 0 {
+		fmt.Fprintf(out, "  optional elts: %d\n", n)
+	}
 	return nil
+}
+
+func compressionName(c zchunk.CompressionType) string {
+	switch c {
+	case zchunk.CompressionNone:
+		return "none"
+	case zchunk.CompressionZstd:
+		return "zstd"
+	default:
+		return fmt.Sprintf("unknown(%d)", uint64(c))
+	}
 }
 
 func checksumName(t zchunk.ChecksumType) string {

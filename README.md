@@ -26,8 +26,10 @@ on-the-wire compatibility with the C `zck` tooling.
   - the `ChecksumType` registry (SHA-1 / SHA-256 / SHA-512 / SHA-512/128) and
     their digest sizes;
   - the **lead** parser/serialiser (`ReadLead` / `Lead.WriteTo`): ID, checksum
-    type, header size and header checksum.
-- `zchunk info FILE`: parses and prints a file's lead.
+    type, header size and header checksum;
+  - the **preface** parser/serialiser (`ReadPreface` / `Preface.WriteTo`): data
+    checksum, validated flags, compression type and optional elements.
+- `zchunk info FILE`: parses and prints a file's lead and preface.
 - `zchunk --version`.
 
 The binary layout follows the canonical `zchunk_format.txt` from the reference
@@ -42,7 +44,7 @@ go install github.com/go-deltasync/zchunk/cmd/zchunk@latest
 ## Roadmap
 
 1. ~~Lead parsing (checksum type, header size, header checksum).~~ ✓
-2. Preface (data checksum, flags, compression type, optional elements).
+2. ~~Preface (data checksum, flags, compression type, optional elements).~~ ✓
 3. Chunk index (per-chunk digest, compressed/uncompressed lengths) + signatures.
 4. zstd chunk (de)compression via a pure-Go codec.
 5. HTTP-range delta download: diff a remote index against a local file and
