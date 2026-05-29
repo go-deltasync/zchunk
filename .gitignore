@@ -1,0 +1,7 @@
+/zchunk
+/zchunk.exe
+/dist/
+*.zck
+cover.out
+cover-pkg.out
+cover.txt
