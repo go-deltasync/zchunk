@@ -17,11 +17,21 @@ on-the-wire compatibility with the C `zck` tooling.
 
 ## What works today
 
-- `internal/zchunk`: the `\0ZCK1` lead magic and the unsigned-LEB128
-  *compressed integer* codec (`AppendCompressedInt` / `ReadCompressedInt`) that
-  the lead, preface and chunk index are built from — at **100 % test coverage**.
-- `zchunk info FILE`: recognises a zchunk file by its lead magic.
+- `internal/zchunk` (at **100 % test coverage**):
+  - the `\0ZCK1` / `\0ZHR1` lead magics;
+  - the variable-length *compressed integer* codec
+    (`AppendCompressedInt` / `ReadCompressedInt`) — note zchunk's convention is
+    the **inverse** of LEB128: the high bit is clear on non-final bytes and set
+    on the final one;
+  - the `ChecksumType` registry (SHA-1 / SHA-256 / SHA-512 / SHA-512/128) and
+    their digest sizes;
+  - the **lead** parser/serialiser (`ReadLead` / `Lead.WriteTo`): ID, checksum
+    type, header size and header checksum.
+- `zchunk info FILE`: parses and prints a file's lead.
 - `zchunk --version`.
+
+The binary layout follows the canonical `zchunk_format.txt` from the reference
+C implementation.
 
 ## Install
 
@@ -31,12 +41,13 @@ go install github.com/go-deltasync/zchunk/cmd/zchunk@latest
 
 ## Roadmap
 
-1. Lead + preface parsing (checksum type, header checksum, flags).
-2. Chunk index (per-chunk digest, compressed/uncompressed lengths).
-3. zstd chunk (de)compression via a pure-Go codec.
-4. HTTP-range delta download: diff a remote index against a local file and
+1. ~~Lead parsing (checksum type, header size, header checksum).~~ ✓
+2. Preface (data checksum, flags, compression type, optional elements).
+3. Chunk index (per-chunk digest, compressed/uncompressed lengths) + signatures.
+4. zstd chunk (de)compression via a pure-Go codec.
+5. HTTP-range delta download: diff a remote index against a local file and
    fetch only the missing chunks.
-5. `-tags=compat` interop tests against the C `zck`/`unzck`/`zck_delta_size`.
+6. `-tags=compat` interop tests against the C `zck`/`unzck`/`zck_delta_size`.
 
 ## Conventions
 

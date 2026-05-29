@@ -42,7 +42,7 @@ func newRoot() *cobra.Command {
 func infoCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "info FILE",
-		Short: "Report whether FILE has a valid zchunk lead magic",
+		Short: "Parse and report FILE's zchunk lead",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f, err := os.Open(args[0])
@@ -50,20 +50,39 @@ func infoCmd() *cobra.Command {
 				return fmt.Errorf("open %s: %w", args[0], err)
 			}
 			defer f.Close()
-			return reportMagic(cmd.OutOrStdout(), args[0], f)
+			return reportLead(cmd.OutOrStdout(), args[0], f)
 		},
 	}
 }
 
-// reportMagic reads the lead magic from r and prints whether it matches.
-func reportMagic(out io.Writer, name string, r io.Reader) error {
-	buf := make([]byte, len(zchunk.Magic))
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return fmt.Errorf("read %s: %w", name, err)
+// reportLead parses the lead from r and prints its fields.
+func reportLead(out io.Writer, name string, r io.Reader) error {
+	lead, err := zchunk.ReadLead(r)
+	if err != nil {
+		return err
 	}
-	if string(buf) != zchunk.Magic {
-		return fmt.Errorf("%s: not a zchunk file (bad lead magic)", name)
+	kind := "zchunk file"
+	if lead.Detached {
+		kind = "detached zchunk header"
 	}
-	fmt.Fprintf(out, "%s: zchunk file (lead magic OK)\n", name)
+	fmt.Fprintf(out, "%s: %s\n", name, kind)
+	fmt.Fprintf(out, "  checksum type: %s\n", checksumName(lead.ChecksumType))
+	fmt.Fprintf(out, "  header size:   %d bytes\n", lead.HeaderSize)
+	fmt.Fprintf(out, "  header cksum:  %x\n", lead.HeaderChecksum)
 	return nil
+}
+
+func checksumName(t zchunk.ChecksumType) string {
+	switch t {
+	case zchunk.SHA1:
+		return "SHA-1"
+	case zchunk.SHA256:
+		return "SHA-256"
+	case zchunk.SHA512:
+		return "SHA-512"
+	case zchunk.SHA512128:
+		return "SHA-512/128"
+	default:
+		return fmt.Sprintf("unknown(%d)", uint64(t))
+	}
 }
