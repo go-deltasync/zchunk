@@ -39,7 +39,56 @@ func newRoot() *cobra.Command {
 	root.AddCommand(infoCmd())
 	root.AddCommand(extractCmd())
 	root.AddCommand(downloadCmd())
+	root.AddCommand(headerCmd())
 	return root
+}
+
+func headerCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "header FILE OUT",
+		Short: "Write FILE's header on its own as a detached header",
+		Long: "Read the full zchunk file FILE and emit just its header to OUT as a " +
+			"standalone detached header (lead ID \"\\0ZHR1\"), so a client can fetch " +
+			"the small header by itself and learn the chunk layout before delta-" +
+			"downloading the body. The header bytes are identical to the embedded " +
+			"header except for the 5-byte magic, so the embedded checksum still " +
+			"verifies.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return writeDetachedHeader(args[0], args[1])
+		},
+	}
+}
+
+// writeDetachedHeader reads the header region of the full zchunk file at inPath
+// and writes it to outPath with the lead magic swapped from "\0ZCK1" to
+// "\0ZHR1" and the body omitted — a detached header.
+func writeDetachedHeader(inPath, outPath string) error {
+	f, err := os.Open(inPath)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", inPath, err)
+	}
+	defer f.Close()
+	lead, err := zchunk.ReadLead(f)
+	if err != nil {
+		return err
+	}
+	leadLen, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	header := make([]byte, leadLen+int64(lead.HeaderSize))
+	if _, err := f.ReadAt(header, 0); err != nil {
+		return fmt.Errorf("read header of %s: %w", inPath, err)
+	}
+	// Swap the 5-byte embedded magic for the detached one; the checksum, which
+	// is computed with the embedded magic regardless, stays valid.
+	copy(header[:len(zchunk.DetachedMagic)], zchunk.DetachedMagic)
+
+	if err := os.WriteFile(outPath, header, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", outPath, err)
+	}
+	return nil
 }
 
 func downloadCmd() *cobra.Command {
