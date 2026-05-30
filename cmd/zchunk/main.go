@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -37,7 +38,86 @@ func newRoot() *cobra.Command {
 	}
 	root.AddCommand(infoCmd())
 	root.AddCommand(extractCmd())
+	root.AddCommand(downloadCmd())
 	return root
+}
+
+func downloadCmd() *cobra.Command {
+	var localPath string
+	cmd := &cobra.Command{
+		Use:   "download URL OUT",
+		Short: "Delta-download URL into OUT, reusing chunks from a local copy",
+		Long: "Fetch the remote zchunk file at URL into OUT over HTTP range requests, " +
+			"reusing any chunks already present in the --local copy and fetching only the rest.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			url, outPath := args[0], args[1]
+
+			var localIndex *zchunk.Index
+			var localBody io.ReaderAt = bytes.NewReader(nil)
+			if localPath != "" {
+				idx, body, closeLocal, err := openLocal(localPath)
+				if err != nil {
+					return err
+				}
+				defer closeLocal()
+				localIndex, localBody = idx, body
+			}
+
+			out, err := os.Create(outPath)
+			if err != nil {
+				return fmt.Errorf("create %s: %w", outPath, err)
+			}
+			defer out.Close()
+
+			remote := zchunk.NewHTTPRangeReader(url, 0, nil)
+			if _, err := zchunk.DownloadDelta(remote, localIndex, localBody, out); err != nil {
+				return err
+			}
+			return out.Close()
+		},
+	}
+	cmd.Flags().StringVar(&localPath, "local", "", "existing local zchunk file to reuse chunks from")
+	return cmd
+}
+
+// openLocal opens a local zchunk file and returns its index and a ReaderAt over
+// its body (the bytes following the header), plus a close function.
+func openLocal(path string) (*zchunk.Index, io.ReaderAt, func() error, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	lead, err := zchunk.ReadLead(f)
+	if err != nil {
+		f.Close()
+		return nil, nil, nil, err
+	}
+	pre, err := zchunk.ReadPreface(f, lead.ChecksumType)
+	if err != nil {
+		f.Close()
+		return nil, nil, nil, err
+	}
+	idx, err := zchunk.ReadIndex(f, pre.UncompressedSource())
+	if err != nil {
+		f.Close()
+		return nil, nil, nil, err
+	}
+	if _, err := zchunk.ReadSignatures(f); err != nil {
+		f.Close()
+		return nil, nil, nil, err
+	}
+	off, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		f.Close()
+		return nil, nil, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, nil, err
+	}
+	return idx, io.NewSectionReader(f, off, fi.Size()-off), f.Close, nil
 }
 
 func extractCmd() *cobra.Command {

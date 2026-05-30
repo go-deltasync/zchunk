@@ -9,11 +9,12 @@ DNF/`librepo` uses to ship repository metadata efficiently.
 `go-deltasync/zchunk` is a single static binary, cgo-free, and aims for
 on-the-wire compatibility with the C `zck` tooling.
 
-> **Status: early scaffolding.** This repo currently provides the format's
-> foundational primitives (the lead magic and the variable-length *compressed
-> integer* codec) plus a CLI skeleton. The lead/preface/chunk-index parsing,
-> zstd handling and HTTP-range delta download are tracked in a dedicated design
-> plan and land here incrementally.
+> **Status: functional, pre-1.0.** The full read/write path is implemented and
+> tested at 100 % coverage: lead/preface/chunk-index/signature parsing and
+> serialisation, per-chunk zstd (de)compression against the dictionary,
+> whole-file extraction and assembly, delta planning, and HTTP-range delta
+> download. Remaining work is interop hardening against the C `zck` tooling
+> (`-tags=compat`) and detached-header / data-checksum verification.
 
 ## What works today
 
@@ -54,9 +55,16 @@ on-the-wire compatibility with the C `zck` tooling.
     compressed digest, classifying every target chunk as reusable-from-local or
     must-fetch and reporting the reused/fetched byte totals — the core of the
     HTTP-range delta download.
+  - **HTTP-range delta download** (`HTTPRangeReader`, `ReadRemoteHeader`,
+    `DownloadDelta`): fetches a remote file's header with two byte-range
+    requests, plans the diff against a local copy, then reconstructs the file by
+    copying the header verbatim and assembling the body from reused local chunks
+    plus range-fetched missing ones — each verified against its index digest.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.
+- `zchunk download [--local FILE] URL OUT`: delta-downloads URL into OUT,
+  reusing chunks from a local copy and fetching only the rest over HTTP range.
 - `zchunk --version`.
 
 The binary layout follows the canonical `zchunk_format.txt` from the reference
@@ -74,8 +82,8 @@ go install github.com/go-deltasync/zchunk/cmd/zchunk@latest
 2. ~~Preface (data checksum, flags, compression type, optional elements).~~ ✓
 3. ~~Chunk index (per-chunk digest, compressed/uncompressed lengths) + signatures.~~ ✓
 4. ~~zstd chunk (de)compression via a pure-Go codec.~~ ✓
-5. HTTP-range delta download: diff a remote index against a local file and
-   fetch only the missing chunks.
+5. ~~HTTP-range delta download: diff a remote index against a local file and
+   fetch only the missing chunks.~~ ✓
 6. `-tags=compat` interop tests against the C `zck`/`unzck`/`zck_delta_size`.
 
 ## Conventions
