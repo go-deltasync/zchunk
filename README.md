@@ -84,6 +84,9 @@ on-the-wire compatibility with the C `zck` tooling.
 - `zchunk header FILE OUT`: writes FILE's header on its own as a detached header.
 - `zchunk download [--local FILE] URL OUT`: delta-downloads URL into OUT,
   reusing chunks from a local copy and fetching only the rest over HTTP range.
+- `zchunk delta-size [--local FILE] URL`: reports how many compressed bytes a
+  delta download of URL would reuse locally versus fetch over the network,
+  without downloading anything (the analogue of the reference `zck_delta_size`).
 - `zchunk --version`.
 
 The binary layout follows the canonical `zchunk_format.txt` from the reference

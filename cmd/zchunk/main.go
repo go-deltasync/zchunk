@@ -41,7 +41,71 @@ func newRoot() *cobra.Command {
 	root.AddCommand(extractCmd())
 	root.AddCommand(downloadCmd())
 	root.AddCommand(headerCmd())
+	root.AddCommand(deltaSizeCmd())
 	return root
+}
+
+func deltaSizeCmd() *cobra.Command {
+	var localPath string
+	cmd := &cobra.Command{
+		Use:   "delta-size [--local FILE] URL",
+		Short: "Report how many bytes a delta download of URL would transfer",
+		Long: "Fetch the remote zchunk header at URL, diff its chunk index against " +
+			"the --local copy, and report how many compressed bytes would be reused " +
+			"locally versus fetched over the network — without downloading anything. " +
+			"The analogue of the reference `zck_delta_size`.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			url := args[0]
+
+			localIndex := &zchunk.Index{}
+			if localPath != "" {
+				idx, _, closeLocal, err := openLocal(localPath)
+				if err != nil {
+					return err
+				}
+				defer closeLocal()
+				localIndex = idx
+			}
+
+			remote := zchunk.NewHTTPRangeReader(url, 0, nil)
+			rh, err := zchunk.ReadRemoteHeader(remote)
+			if err != nil {
+				return err
+			}
+			plan, err := zchunk.PlanDelta(localIndex, rh.Index)
+			if err != nil {
+				return err
+			}
+			return reportDeltaSize(cmd.OutOrStdout(), url, plan)
+		},
+	}
+	cmd.Flags().StringVar(&localPath, "local", "", "existing local zchunk file to reuse chunks from")
+	return cmd
+}
+
+// reportDeltaSize prints the reuse/fetch breakdown of a delta plan.
+func reportDeltaSize(out io.Writer, url string, plan *zchunk.DeltaPlan) error {
+	var reuseChunks, fetchChunks int
+	for _, s := range plan.Sources {
+		if s.Local {
+			reuseChunks++
+		} else {
+			fetchChunks++
+		}
+	}
+	reuse, fetch := plan.ReuseBytes(), plan.FetchBytes()
+	total := reuse + fetch
+	pct := 0.0
+	if total > 0 {
+		pct = 100 * float64(fetch) / float64(total)
+	}
+	fmt.Fprintf(out, "%s\n", url)
+	fmt.Fprintf(out, "  chunks:  %d total (%d reused, %d to fetch)\n",
+		len(plan.Sources), reuseChunks, fetchChunks)
+	fmt.Fprintf(out, "  reuse:   %d bytes\n", reuse)
+	fmt.Fprintf(out, "  fetch:   %d bytes (%.1f%% of %d)\n", fetch, pct, total)
+	return nil
 }
 
 func createCmd() *cobra.Command {
