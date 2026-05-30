@@ -1,6 +1,7 @@
 package zchunk
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 )
@@ -84,6 +85,34 @@ func ReadLead(r io.Reader) (*Lead, error) {
 		HeaderSize:     headerSize,
 		HeaderChecksum: sum,
 	}, nil
+}
+
+// VerifyHeader checks headerBody (the verbatim preface+index+signatures that
+// follow the lead) against the lead's embedded header checksum. The digest is
+// taken with the lead's checksum type over the lead — up to but excluding the
+// header-checksum field — followed by headerBody, matching what WriteTo and the
+// reference implementation produce. For a detached header the reference
+// substitutes Magic for DetachedMagic when hashing, so the same bytes verify
+// whether or not the header is detached; VerifyHeader does the same. It returns
+// an error if the checksum type is unknown or the digest does not match.
+func (l *Lead) VerifyHeader(headerBody []byte) error {
+	// ChecksumType was validated when the lead was parsed, but VerifyHeader may
+	// be called on a hand-built lead, so validate via Sum below.
+	leadNoDigest := []byte(Magic)
+	leadNoDigest = AppendCompressedInt(leadNoDigest, uint64(l.ChecksumType))
+	leadNoDigest = AppendCompressedInt(leadNoDigest, l.HeaderSize)
+
+	toHash := make([]byte, 0, len(leadNoDigest)+len(headerBody))
+	toHash = append(toHash, leadNoDigest...)
+	toHash = append(toHash, headerBody...)
+	sum, err := l.ChecksumType.Sum(toHash)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(sum, l.HeaderChecksum) {
+		return fmt.Errorf("zchunk: header checksum mismatch")
+	}
+	return nil
 }
 
 // WriteTo serialises the lead to w. It reports an error if the checksum type is

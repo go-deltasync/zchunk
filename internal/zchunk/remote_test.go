@@ -57,12 +57,19 @@ func buildFullFile(t *testing.T, idx *Index, body []byte) []byte {
 	return buf.Bytes()
 }
 
-// craftFile prepends a valid lead (zero header checksum, which ReadRemoteHeader
-// does not verify) to a hand-built header body.
+// craftFile prepends a lead with a correct header checksum (so the file passes
+// ReadRemoteHeader's header verification and the test exercises a later parse
+// step) to a hand-built header body.
 func craftFile(t *testing.T, ckType ChecksumType, headerBody []byte) []byte {
 	t.Helper()
-	size, _ := ckType.Size()
-	lead := &Lead{ChecksumType: ckType, HeaderSize: uint64(len(headerBody)), HeaderChecksum: make([]byte, size)}
+	lead := &Lead{ChecksumType: ckType, HeaderSize: uint64(len(headerBody))}
+	// Compute the header checksum the same way WriteFile/VerifyHeader do.
+	leadNoDigest := AppendCompressedInt(AppendCompressedInt([]byte(Magic), uint64(ckType)), lead.HeaderSize)
+	sum, err := ckType.Sum(append(append([]byte(nil), leadNoDigest...), headerBody...))
+	if err != nil {
+		t.Fatalf("Sum: %v", err)
+	}
+	lead.HeaderChecksum = sum
 	var buf bytes.Buffer
 	if _, err := lead.WriteTo(&buf); err != nil {
 		t.Fatalf("lead WriteTo: %v", err)
@@ -115,6 +122,20 @@ func TestReadRemoteHeaderErrors(t *testing.T) {
 		truncated := file[:rh.BodyOffset-1]
 		if _, err := ReadRemoteHeader(byteRange{data: truncated}); err == nil {
 			t.Fatal("expected short-header error")
+		}
+	})
+
+	t.Run("header-checksum-mismatch", func(t *testing.T) {
+		// Corrupt one header byte after the lead: the embedded checksum no
+		// longer matches, so verification must fail before any parsing.
+		corrupt := append([]byte(nil), file...)
+		rh, err := ReadRemoteHeader(byteRange{data: file})
+		if err != nil {
+			t.Fatalf("ReadRemoteHeader: %v", err)
+		}
+		corrupt[rh.BodyOffset-1] ^= 0xff // last header byte
+		if _, err := ReadRemoteHeader(byteRange{data: corrupt}); err == nil {
+			t.Fatal("expected header checksum mismatch")
 		}
 	})
 

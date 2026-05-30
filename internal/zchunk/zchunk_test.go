@@ -237,3 +237,34 @@ func TestLeadWriteToErrors(t *testing.T) {
 		t.Fatalf("WriteTo write error = %v, want errBoom", err)
 	}
 }
+
+func TestVerifyHeader(t *testing.T) {
+	headerBody := []byte("preface+index+signatures bytes")
+	// A correct checksum, computed the same way WriteFile does.
+	leadNoDigest := AppendCompressedInt(AppendCompressedInt([]byte(Magic), uint64(SHA256)), uint64(len(headerBody)))
+	good, err := SHA256.Sum(append(append([]byte(nil), leadNoDigest...), headerBody...))
+	if err != nil {
+		t.Fatalf("Sum: %v", err)
+	}
+
+	t.Run("ok", func(t *testing.T) {
+		lead := &Lead{ChecksumType: SHA256, HeaderSize: uint64(len(headerBody)), HeaderChecksum: good}
+		if err := lead.VerifyHeader(headerBody); err != nil {
+			t.Fatalf("VerifyHeader: %v", err)
+		}
+	})
+
+	t.Run("mismatch", func(t *testing.T) {
+		lead := &Lead{ChecksumType: SHA256, HeaderSize: uint64(len(headerBody)), HeaderChecksum: bytes.Repeat([]byte{0xff}, 32)}
+		if err := lead.VerifyHeader(headerBody); err == nil {
+			t.Fatal("expected header checksum mismatch")
+		}
+	})
+
+	t.Run("unknown-checksum-type", func(t *testing.T) {
+		lead := &Lead{ChecksumType: 99, HeaderSize: uint64(len(headerBody))}
+		if err := lead.VerifyHeader(headerBody); err == nil {
+			t.Fatal("expected unknown checksum type error")
+		}
+	})
+}

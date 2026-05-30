@@ -60,6 +60,11 @@ on-the-wire compatibility with the C `zck` tooling.
     requests, plans the diff against a local copy, then reconstructs the file by
     copying the header verbatim and assembling the body from reused local chunks
     plus range-fetched missing ones — each verified against its index digest.
+  - **header-checksum verification** (`Lead.VerifyHeader`): recomputes the
+    header digest over the lead (excluding the checksum field) plus the
+    preface/index/signatures and matches it against the lead's embedded value,
+    so `ReadRemoteHeader` rejects a corrupt or truncated header before planning
+    a download around its offsets.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.

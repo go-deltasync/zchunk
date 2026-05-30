@@ -103,6 +103,45 @@ func TestCompatZckToOurExtract(t *testing.T) {
 	}
 }
 
+// readFullRange serves absolute byte ranges from an in-memory file, so a real
+// .zck file can be fed to ReadRemoteHeader without a network server.
+type readFullRange struct{ data []byte }
+
+func (r readFullRange) ReadRange(offset, length int64) ([]byte, error) {
+	end := offset + length
+	if end > int64(len(r.data)) {
+		end = int64(len(r.data))
+	}
+	return append([]byte(nil), r.data[offset:end]...), nil
+}
+
+// TestCompatZckHeaderVerifies confirms that a header produced by the C `zck`
+// tool passes our embedded-checksum verification: ReadRemoteHeader recomputes
+// the header digest over lead-without-checksum + header body and matches it
+// against the lead, exercising the read-path integrity check against the
+// reference's exact byte layout.
+func TestCompatZckHeaderVerifies(t *testing.T) {
+	zck := lookTool(t, "zck")
+
+	dir := t.TempDir()
+	orig := randBytes(t, 256*1024)
+	src := filepath.Join(dir, "data.bin")
+	if err := os.WriteFile(src, orig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	zckPath := filepath.Join(dir, "data.zck")
+	if out, err := exec.Command(zck, "-o", zckPath, src).CombinedOutput(); err != nil {
+		t.Fatalf("zck failed: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(zckPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadRemoteHeader(readFullRange{data: data}); err != nil {
+		t.Fatalf("ReadRemoteHeader on zck output: %v", err)
+	}
+}
+
 // writeOurZck builds a zchunk file from content using fixed-size chunks, an
 // empty dictionary, zstd compression and SHA-256, and writes it to path.
 func writeOurZck(t *testing.T, path string, content []byte) {

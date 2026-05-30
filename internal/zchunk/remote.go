@@ -54,6 +54,11 @@ func ReadRemoteHeader(remote RangeReader) (*RemoteHeader, error) {
 		return nil, fmt.Errorf("zchunk: fetch header: got %d bytes, want %d",
 			len(hdrBody), lead.HeaderSize)
 	}
+	// Validate the header against its embedded checksum before trusting any of
+	// the index offsets/digests we are about to plan a download around.
+	if err := lead.VerifyHeader(hdrBody); err != nil {
+		return nil, err
+	}
 
 	hr := bytes.NewReader(hdrBody)
 	pre, err := ReadPreface(hr, lead.ChecksumType)
