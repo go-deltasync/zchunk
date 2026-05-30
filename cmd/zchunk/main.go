@@ -36,7 +36,51 @@ func newRoot() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(infoCmd())
+	root.AddCommand(extractCmd())
 	return root
+}
+
+func extractCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "extract FILE OUT",
+		Short: "Decompress FILE's chunks and write the content to OUT",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			f, err := os.Open(args[0])
+			if err != nil {
+				return fmt.Errorf("open %s: %w", args[0], err)
+			}
+			defer f.Close()
+			out, err := os.Create(args[1])
+			if err != nil {
+				return fmt.Errorf("create %s: %w", args[1], err)
+			}
+			defer out.Close()
+			return extract(f, out)
+		},
+	}
+}
+
+// extract parses the full header from r, then reconstructs the file content into
+// out.
+func extract(r io.Reader, out io.Writer) error {
+	lead, err := zchunk.ReadLead(r)
+	if err != nil {
+		return err
+	}
+	pre, err := zchunk.ReadPreface(r, lead.ChecksumType)
+	if err != nil {
+		return err
+	}
+	idx, err := zchunk.ReadIndex(r, pre.UncompressedSource())
+	if err != nil {
+		return err
+	}
+	if _, err := zchunk.ReadSignatures(r); err != nil {
+		return err
+	}
+	_, err = idx.Extract(r, pre.CompressionType, out)
+	return err
 }
 
 func infoCmd() *cobra.Command {

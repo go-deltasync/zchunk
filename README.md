@@ -40,8 +40,15 @@ on-the-wire compatibility with the C `zck` tooling.
     `none`/`zstd` (de)compression via the pure-Go `klauspost/compress`, including
     raw-dictionary support so chunks can be coded against chunk 0 (the dict),
     matching the reference's `ZSTD_compress_usingDict`.
+  - the **checksum registry's hashing** (`ChecksumType.Sum`): SHA-1 / SHA-256 /
+    SHA-512 / SHA-512-128 digests (the last being SHA-512 truncated to 16 bytes,
+    per the reference);
+  - whole-file **extraction** (`Index.Extract`): reads the body, verifies each
+    chunk against its index digest, decompresses it against the dictionary
+    (chunk 0) and reassembles the original content.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
+- `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.
 - `zchunk --version`.
 
 The binary layout follows the canonical `zchunk_format.txt` from the reference
