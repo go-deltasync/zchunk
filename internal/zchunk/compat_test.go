@@ -148,31 +148,19 @@ func writeOurZck(t *testing.T, path string, content []byte) {
 	t.Helper()
 	const chunkSize = 16 * 1024
 
-	idx := &Index{ChunkChecksumType: SHA256}
-	// Chunk 0 is the (empty) dictionary: zero lengths, all-zero digest.
-	idx.Chunks = append(idx.Chunks, IndexEntry{Digest: make([]byte, 32)})
-
-	var body []byte
+	// Use the high-level Builder (empty dictionary, zstd, SHA-256), which reuses
+	// a single encoder across chunks — also exercising that path against unzck.
+	b, err := NewBuilder(CompressionZstd, SHA256, nil)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	defer b.Close()
 	for off := 0; off < len(content); off += chunkSize {
 		end := off + chunkSize
 		if end > len(content) {
 			end = len(content)
 		}
-		plain := content[off:end]
-		comp, err := CompressChunk(CompressionZstd, nil, plain)
-		if err != nil {
-			t.Fatalf("CompressChunk: %v", err)
-		}
-		digest, err := SHA256.Sum(comp)
-		if err != nil {
-			t.Fatalf("Sum: %v", err)
-		}
-		idx.Chunks = append(idx.Chunks, IndexEntry{
-			Digest:     digest,
-			CompLength: uint64(len(comp)),
-			Length:     uint64(len(plain)),
-		})
-		body = append(body, comp...)
+		b.AddChunk(content[off:end])
 	}
 
 	f, err := os.Create(path)
@@ -181,7 +169,7 @@ func writeOurZck(t *testing.T, path string, content []byte) {
 	}
 	defer f.Close()
 	pre := &Preface{CompressionType: CompressionZstd}
-	if _, err := WriteFile(f, SHA256, pre, idx, nil, body); err != nil {
+	if _, err := b.WriteFile(f, SHA256, pre, nil); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 }

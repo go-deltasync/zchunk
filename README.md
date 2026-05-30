@@ -149,13 +149,23 @@ cost of invoking the C tool rather than its raw codec speed.
   (`defaultFetchConcurrency`) while still writing output strictly in source
   order. This cuts both the number of HTTP round-trips and their wall-clock
   latency, as `librepo` does.
+- *Single encoder per file (write path).* The `Builder` reuses one zstd encoder
+  bound to the dictionary across every chunk, mirroring the decoder reuse and
+  the reference's single `ZSTD_CCtx`, instead of the fresh encoder a per-chunk
+  `CompressChunk` builds. On a 1 MiB / 32 KiB-chunk file this cut the body build
+  from ~1150 to ~160 allocations/op and ~53.7 MB → ~3.1 MB/op (~2.5× faster):
+
+  ```bash
+  go test -run '^$' -bench BenchmarkBuildBody -benchmem ./internal/zchunk/
+  ```
+
+  | Sub-benchmark | Time/op | Bytes/op | Allocs/op |
+  |---------------|---------|----------|-----------|
+  | `per-chunk`   | ~4.32 ms | ~53.7 MB | 1154 |
+  | `builder`     | ~1.72 ms | ~3.1 MB  | 161  |
 
 **Proposed further improvements** (not yet implemented):
 
-- *Encoder reuse / pooling* on the write path, symmetric to the decoder reuse:
-  a high-level file builder should reuse one zstd encoder (e.g. via a
-  `sync.Pool`) across chunks rather than the ~1.8 MB/op a fresh
-  `CompressChunk` allocates today.
 - *Scratch-buffer reuse* in `Extract`/`AssembleBody`: reuse a `[]byte` sized to
   the largest chunk for the compressed read and the decode destination, to
   shave the remaining per-chunk allocations.

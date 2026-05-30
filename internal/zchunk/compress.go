@@ -17,22 +17,57 @@ import (
 // CompressChunk compresses a single chunk's uncompressed bytes under ct. dict is
 // the decompressed dictionary (chunk 0); pass nil/empty when compressing the
 // dictionary chunk or any file without a dictionary. The result is the chunk's
-// body bytes (one zstd frame, or src verbatim for CompressionNone).
+// body bytes (one zstd frame, or src verbatim for CompressionNone). For
+// compressing many chunks of one file, prefer a Builder, which reuses a single
+// encoder rather than constructing one per call.
 func CompressChunk(ct CompressionType, dict, src []byte) ([]byte, error) {
-	switch ct {
-	case CompressionNone:
-		return append([]byte(nil), src...), nil
-	case CompressionZstd:
+	if !ct.valid() {
+		return nil, fmt.Errorf("zchunk: unsupported compression type %d", uint64(ct))
+	}
+	ce := newChunkEncoder(ct, dict)
+	defer ce.close()
+	return ce.compress(src), nil
+}
+
+// chunkEncoder compresses successive chunks of a single file, reusing one zstd
+// encoder (bound to the file's dictionary) across all of them rather than
+// constructing one per chunk — the write-path mirror of chunkDecoder. The zero
+// encoder is unused for CompressionNone. A chunkEncoder is not safe for
+// concurrent use; build one per file.
+type chunkEncoder struct {
+	ct  CompressionType
+	enc *zstd.Encoder // nil for CompressionNone
+}
+
+// newChunkEncoder builds an encoder for ct bound to dict (the decompressed
+// dictionary, or nil/empty for none). ct must already be valid; only none and
+// zstd are handled.
+func newChunkEncoder(ct CompressionType, dict []byte) *chunkEncoder {
+	ce := &chunkEncoder{ct: ct}
+	if ct == CompressionZstd {
 		opts := []zstd.EOption{zstd.WithEncoderConcurrency(1)}
 		if len(dict) > 0 {
 			opts = append(opts, zstd.WithEncoderDictRaw(0, dict))
 		}
 		// NewWriter only fails on invalid options; ours are static and valid.
-		enc, _ := zstd.NewWriter(nil, opts...)
-		defer enc.Close()
-		return enc.EncodeAll(src, nil), nil
-	default:
-		return nil, fmt.Errorf("zchunk: unsupported compression type %d", uint64(ct))
+		ce.enc, _ = zstd.NewWriter(nil, opts...)
+	}
+	return ce
+}
+
+// compress encodes one chunk's bytes (verbatim for none, one zstd frame
+// otherwise).
+func (ce *chunkEncoder) compress(src []byte) []byte {
+	if ce.ct == CompressionNone {
+		return append([]byte(nil), src...)
+	}
+	return ce.enc.EncodeAll(src, nil)
+}
+
+// close releases the underlying zstd encoder, if any.
+func (ce *chunkEncoder) close() {
+	if ce.enc != nil {
+		ce.enc.Close()
 	}
 }
 

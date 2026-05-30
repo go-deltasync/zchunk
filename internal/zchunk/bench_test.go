@@ -139,6 +139,39 @@ func BenchmarkWriteFile(b *testing.B) {
 	}
 }
 
+// BenchmarkBuildBody contrasts two ways of compressing a whole file's worth of
+// chunks: "per-chunk" constructs a fresh zstd encoder for every chunk (the old
+// CompressChunk-in-a-loop pattern), while "builder" reuses one encoder across
+// all chunks via Builder. The allocs/op gap is the encoder-reuse win.
+func BenchmarkBuildBody(b *testing.B) {
+	chunks := benchChunks(benchData(1<<20), 32*1024)
+
+	b.Run("per-chunk", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			for _, plain := range chunks {
+				if _, err := CompressChunk(CompressionZstd, nil, plain); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+
+	b.Run("builder", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			bld, err := NewBuilder(CompressionZstd, SHA256, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for _, plain := range chunks {
+				bld.AddChunk(plain)
+			}
+			bld.Close()
+		}
+	})
+}
+
 func BenchmarkPlanDelta(b *testing.B) {
 	data := benchData(4 << 20)
 	idx, _ := buildBenchBody(b, SHA256, benchChunks(data, 16*1024))
