@@ -121,7 +121,7 @@ codec benchmarks, 1 MiB / 32 KiB-chunk file for `Extract`/`WriteFile`):
 | `CompressChunkZstd`   | ~330 MB/s   | 37        |
 | `DecompressChunkZstd` | ~1.06 GB/s  | 27        |
 | `ChecksumSHA256`      | ~3.27 GB/s  | 1         |
-| `Extract` (whole file)| ~1.05 GB/s  | 137       |
+| `Extract` (whole file)| ~1.15 GB/s  | 105       |
 | `WriteFile`           | ~2.40 GB/s  | 20        |
 
 A `compat`-tagged benchmark compares our in-process `Extract` head-to-head with
@@ -142,6 +142,11 @@ cost of invoking the C tool rather than its raw codec speed.
   file's dictionary across all chunks, instead of constructing one per chunk —
   mirroring the reference's single `ZSTD_DCtx`. This cut a 32-chunk extract from
   908 to 137 allocations/op (and ~3.9 MB → ~1.5 MB/op).
+- *Scratch-buffer reuse.* `Extract` reuses one compressed-read buffer (grown to
+  the largest chunk) and one decode destination across every chunk, and
+  `AssembleBody` reuses one local-read buffer — instead of allocating per chunk.
+  On the same 32-chunk extract this took the figures above further down, to ~105
+  allocations/op and ~138 KB/op (from ~1.5 MB).
 - *Coalesced + concurrent range fetches.* `AssembleBody` merges every run of
   consecutive must-fetch chunks into a single contiguous range request (target
   chunks are laid out back-to-back in the body, so a run is one byte range),
@@ -163,12 +168,6 @@ cost of invoking the C tool rather than its raw codec speed.
   |---------------|---------|----------|-----------|
   | `per-chunk`   | ~4.32 ms | ~53.7 MB | 1154 |
   | `builder`     | ~1.72 ms | ~3.1 MB  | 161  |
-
-**Proposed further improvements** (not yet implemented):
-
-- *Scratch-buffer reuse* in `Extract`/`AssembleBody`: reuse a `[]byte` sized to
-  the largest chunk for the compressed read and the decode destination, to
-  shave the remaining per-chunk allocations.
 
 ## Conventions
 

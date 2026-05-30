@@ -79,6 +79,7 @@ func (ce *chunkEncoder) close() {
 type chunkDecoder struct {
 	ct  CompressionType
 	dec *zstd.Decoder // nil for CompressionNone
+	dst []byte        // reused decode destination, grown to the largest chunk
 }
 
 // newChunkDecoder builds a decoder for ct bound to dict (the decompressed
@@ -98,18 +99,22 @@ func newChunkDecoder(ct CompressionType, dict []byte) *chunkDecoder {
 }
 
 // decompress reverses one chunk's compression; the result must be exactly
-// decompressedLen bytes.
+// decompressedLen bytes. The returned slice is backed by a buffer reused across
+// calls, so it is only valid until the next decompress call on the same decoder
+// — Extract writes each chunk before decoding the next, so this is safe.
 func (cd *chunkDecoder) decompress(src []byte, decompressedLen uint64) ([]byte, error) {
 	if cd.ct == CompressionNone {
 		if uint64(len(src)) != decompressedLen {
 			return nil, fmt.Errorf("zchunk: stored chunk length %d != declared %d", len(src), decompressedLen)
 		}
-		return append([]byte(nil), src...), nil
+		cd.dst = append(cd.dst[:0], src...)
+		return cd.dst, nil
 	}
-	out, err := cd.dec.DecodeAll(src, nil)
+	out, err := cd.dec.DecodeAll(src, cd.dst[:0])
 	if err != nil {
 		return nil, fmt.Errorf("zchunk: zstd decode: %w", err)
 	}
+	cd.dst = out
 	if uint64(len(out)) != decompressedLen {
 		return nil, fmt.Errorf("zchunk: decompressed chunk length %d != declared %d", len(out), decompressedLen)
 	}

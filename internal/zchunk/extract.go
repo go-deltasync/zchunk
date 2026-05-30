@@ -30,7 +30,7 @@ func (idx *Index) Extract(r io.Reader, ct CompressionType, out io.Writer) (int64
 	// for use as the zstd dictionary of the remaining chunks. An empty dict
 	// (zero lengths, conventionally an all-zero digest) yields nil.
 	dictDec := newChunkDecoder(ct, nil)
-	dict, err := idx.readChunk(r, dictDec, idx.Chunks[0], 0)
+	dict, comp, err := idx.readChunk(r, dictDec, idx.Chunks[0], 0, nil)
 	dictDec.close()
 	if err != nil {
 		return 0, err
@@ -38,11 +38,14 @@ func (idx *Index) Extract(r io.Reader, ct CompressionType, out io.Writer) (int64
 
 	// Reuse a single decoder bound to the dictionary for every data chunk,
 	// instead of constructing one per chunk (as the reference reuses one DCtx).
+	// comp is the compressed-read scratch, grown to the largest chunk and reused
+	// across iterations; the decoder reuses its own decode destination likewise.
 	dec := newChunkDecoder(ct, dict)
 	defer dec.close()
 	var written int64
 	for i := 1; i < len(idx.Chunks); i++ {
-		data, err := idx.readChunk(r, dec, idx.Chunks[i], i)
+		var data []byte
+		data, comp, err = idx.readChunk(r, dec, idx.Chunks[i], i, comp)
 		if err != nil {
 			return written, err
 		}
@@ -61,29 +64,38 @@ func (idx *Index) Extract(r io.Reader, ct CompressionType, out io.Writer) (int64
 // 0) is treated as empty content with no verification, since the reference
 // leaves an empty dictionary's digest all-zero. n is the chunk number, for
 // error messages. The chunk checksum type must already be validated.
-func (idx *Index) readChunk(r io.Reader, dec *chunkDecoder, e IndexEntry, n int) ([]byte, error) {
-	comp := make([]byte, e.CompLength)
+//
+// scratch is a reusable compressed-read buffer; readChunk grows it as needed and
+// returns it (as comp) so the caller can pass it back for the next chunk,
+// avoiding a per-chunk allocation. The returned data is backed by the decoder's
+// reused destination and is valid only until the next readChunk call.
+func (idx *Index) readChunk(r io.Reader, dec *chunkDecoder, e IndexEntry, n int, scratch []byte) (data, comp []byte, err error) {
+	if uint64(cap(scratch)) >= e.CompLength {
+		comp = scratch[:e.CompLength]
+	} else {
+		comp = make([]byte, e.CompLength)
+	}
 	if _, err := io.ReadFull(r, comp); err != nil {
-		return nil, fmt.Errorf("zchunk: read chunk %d body: %w", n, err)
+		return nil, comp, fmt.Errorf("zchunk: read chunk %d body: %w", n, err)
 	}
 	if e.CompLength == 0 {
-		return nil, nil
+		return nil, comp, nil
 	}
 	// Digest covers the compressed bytes (so peers can match chunks before
 	// decompressing). Type is pre-validated, so Sum cannot error here.
 	sum, _ := idx.ChunkChecksumType.Sum(comp)
 	if !bytes.Equal(sum, e.Digest) {
-		return nil, fmt.Errorf("zchunk: chunk %d digest mismatch", n)
+		return nil, comp, fmt.Errorf("zchunk: chunk %d digest mismatch", n)
 	}
-	data, err := dec.decompress(comp, e.Length)
+	data, err = dec.decompress(comp, e.Length)
 	if err != nil {
-		return nil, fmt.Errorf("zchunk: chunk %d: %w", n, err)
+		return nil, comp, fmt.Errorf("zchunk: chunk %d: %w", n, err)
 	}
 	if e.UncompressedDigest != nil {
 		usum, _ := idx.ChunkChecksumType.Sum(data)
 		if !bytes.Equal(usum, e.UncompressedDigest) {
-			return nil, fmt.Errorf("zchunk: chunk %d uncompressed digest mismatch", n)
+			return nil, comp, fmt.Errorf("zchunk: chunk %d uncompressed digest mismatch", n)
 		}
 	}
-	return data, nil
+	return data, comp, nil
 }

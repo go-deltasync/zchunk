@@ -87,6 +87,7 @@ func (p *DeltaPlan) AssembleBody(target *Index, local io.ReaderAt, remote RangeR
 	}
 
 	var written int64
+	var localBuf []byte // reused local-read scratch, grown to the largest local chunk
 	for i := 0; i < len(p.Sources); {
 		s := p.Sources[i]
 		switch {
@@ -94,7 +95,12 @@ func (p *DeltaPlan) AssembleBody(target *Index, local io.ReaderAt, remote RangeR
 			// Empty chunk: nothing to copy, fetch or write.
 			i++
 		case s.Local:
-			data := make([]byte, s.Length)
+			if uint64(cap(localBuf)) >= s.Length {
+				localBuf = localBuf[:s.Length]
+			} else {
+				localBuf = make([]byte, s.Length)
+			}
+			data := localBuf
 			n, err := local.ReadAt(data, int64(s.Offset))
 			if n != int(s.Length) {
 				if err == nil {
