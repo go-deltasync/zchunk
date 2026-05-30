@@ -81,6 +81,17 @@ func reportLead(out io.Writer, name string, r io.Reader) error {
 	if n := len(pre.OptionalElements); n > 0 {
 		fmt.Fprintf(out, "  optional elts: %d\n", n)
 	}
+
+	idx, err := zchunk.ReadIndex(r, pre.UncompressedSource())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "  chunk cksum:   %s\n", checksumName(idx.ChunkChecksumType))
+	fmt.Fprintf(out, "  chunks:        %d", len(idx.Chunks))
+	if d, ok := idx.Dict(); ok {
+		fmt.Fprintf(out, " (dict: %d -> %d bytes)", d.CompLength, d.Length)
+	}
+	fmt.Fprintln(out)
 	return nil
 }
 
