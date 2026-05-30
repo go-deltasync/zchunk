@@ -46,6 +46,10 @@ on-the-wire compatibility with the C `zck` tooling.
   - whole-file **extraction** (`Index.Extract`): reads the body, verifies each
     chunk against its index digest, decompresses it against the dictionary
     (chunk 0) and reassembles the original content.
+  - whole-file **assembly** (`WriteFile`): emits a complete file (lead, preface,
+    index, signatures, body), computing the data checksum over the body and the
+    lead's header checksum, so a written file round-trips through the readers and
+    `Extract`.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.
