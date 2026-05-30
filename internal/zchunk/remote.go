@@ -3,6 +3,7 @@ package zchunk
 import (
 	"bytes"
 	"fmt"
+	"hash"
 	"io"
 )
 
@@ -105,6 +106,12 @@ func (o offsetRange) ReadRange(offset, length int64) ([]byte, error) {
 // output is the remote header verbatim followed by the assembled body, so it
 // round-trips through the readers and Extract. It returns the number of bytes
 // written.
+//
+// As a final integrity check the assembled body is hashed (with the lead's
+// checksum type) and matched against the preface's whole-file data checksum,
+// catching any inconsistency the per-chunk digests would miss. The data
+// checksum is not generated for an uncompressed-source file, so verification is
+// skipped there, matching the reference.
 func DownloadDelta(remote RangeReader, localIndex *Index, localBody io.ReaderAt, out io.Writer) (int64, error) {
 	rh, err := ReadRemoteHeader(remote)
 	if err != nil {
@@ -121,8 +128,27 @@ func DownloadDelta(remote RangeReader, localIndex *Index, localBody io.ReaderAt,
 		return written, fmt.Errorf("zchunk: write header: %w", err)
 	}
 
+	// Tee the body through a hasher so it can be checked against the preface's
+	// data checksum without buffering the whole body.
+	bodyOut := out
+	var h hash.Hash
+	if !rh.Preface.UncompressedSource() {
+		// ReadLead validated the checksum type, so newHash cannot fail here.
+		h, _ = rh.Lead.ChecksumType.newHash()
+		bodyOut = io.MultiWriter(out, h)
+	}
+
 	body := offsetRange{rr: remote, base: rh.BodyOffset}
-	bn, err := plan.AssembleBody(rh.Index, localBody, body, out)
+	bn, err := plan.AssembleBody(rh.Index, localBody, body, bodyOut)
 	written += bn
-	return written, err
+	if err != nil {
+		return written, err
+	}
+	if h != nil {
+		size, _ := rh.Lead.ChecksumType.Size()
+		if sum := h.Sum(nil)[:size]; !bytes.Equal(sum, rh.Preface.DataChecksum) {
+			return written, fmt.Errorf("zchunk: data checksum mismatch")
+		}
+	}
+	return written, nil
 }

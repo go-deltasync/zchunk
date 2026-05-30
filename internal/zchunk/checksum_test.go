@@ -37,3 +37,9 @@ func TestChecksumTypeSumUnknown(t *testing.T) {
 		t.Fatal("Sum accepted an unknown checksum type")
 	}
 }
+
+func TestChecksumTypeNewHashUnknown(t *testing.T) {
+	if _, err := ChecksumType(99).newHash(); err == nil {
+		t.Fatal("newHash accepted an unknown checksum type")
+	}
+}

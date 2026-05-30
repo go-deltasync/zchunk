@@ -214,3 +214,60 @@ func TestDownloadDeltaErrors(t *testing.T) {
 		}
 	})
 }
+
+// craftFileBody builds a complete file from a hand-written preface/index (so the
+// preface's DataChecksum can be set freely) with a valid header checksum,
+// followed by body.
+func craftFileBody(t *testing.T, pre *Preface, idx *Index, body []byte) []byte {
+	t.Helper()
+	var hb bytes.Buffer
+	if _, err := pre.WriteTo(&hb); err != nil {
+		t.Fatalf("preface WriteTo: %v", err)
+	}
+	if _, err := idx.WriteTo(&hb, pre.UncompressedSource()); err != nil {
+		t.Fatalf("index WriteTo: %v", err)
+	}
+	if _, err := (&Signatures{}).WriteTo(&hb); err != nil {
+		t.Fatalf("signatures WriteTo: %v", err)
+	}
+	return append(craftFile(t, SHA256, hb.Bytes()), body...)
+}
+
+func TestDownloadDeltaDataChecksum(t *testing.T) {
+	target, _, targetBody, _ := mixedSetup(t)
+	emptyLocal := &Index{ChunkChecksumType: SHA256} // nothing reusable: fetch all
+
+	t.Run("mismatch", func(t *testing.T) {
+		// Valid header (checksum matches) and valid per-chunk digests, but the
+		// preface's whole-file data checksum is wrong for the body.
+		pre := &Preface{CompressionType: CompressionNone, DataChecksum: bytes.Repeat([]byte{0xff}, 32)}
+		file := craftFileBody(t, pre, target, targetBody)
+		if _, err := DownloadDelta(byteRange{data: file}, emptyLocal, bytes.NewReader(nil), io.Discard); err == nil {
+			t.Fatal("expected data checksum mismatch")
+		}
+	})
+
+	t.Run("uncompressed-source-skips", func(t *testing.T) {
+		// An uncompressed-source file suppresses the data checksum (zeros), so
+		// verification must be skipped rather than fail.
+		uidx := &Index{ChunkChecksumType: SHA256}
+		for _, c := range target.Chunks {
+			c.UncompressedDigest = make([]byte, 32)
+			uidx.Chunks = append(uidx.Chunks, c)
+		}
+		pre := &Preface{CompressionType: CompressionNone, Flags: FlagUncompressedSource}
+		var buf bytes.Buffer
+		if _, err := WriteFile(&buf, SHA256, pre, uidx, nil, targetBody); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		file := buf.Bytes()
+		var out bytes.Buffer
+		n, err := DownloadDelta(byteRange{data: file}, emptyLocal, bytes.NewReader(nil), &out)
+		if err != nil {
+			t.Fatalf("DownloadDelta: %v", err)
+		}
+		if int(n) != len(file) || !bytes.Equal(out.Bytes(), file) {
+			t.Fatalf("download mismatch: n=%d, want %d", n, len(file))
+		}
+	})
+}

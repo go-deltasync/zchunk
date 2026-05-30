@@ -12,9 +12,10 @@ on-the-wire compatibility with the C `zck` tooling.
 > **Status: functional, pre-1.0.** The full read/write path is implemented and
 > tested at 100 % coverage: lead/preface/chunk-index/signature parsing and
 > serialisation, per-chunk zstd (de)compression against the dictionary,
-> whole-file extraction and assembly, delta planning, and HTTP-range delta
-> download. Remaining work is interop hardening against the C `zck` tooling
-> (`-tags=compat`) and detached-header / data-checksum verification.
+> whole-file extraction and assembly, delta planning, HTTP-range delta
+> download, and header/data-checksum verification. Remaining work is interop
+> hardening against the C `zck` tooling (`-tags=compat`) and detached-header
+> support.
 
 ## What works today
 
@@ -65,6 +66,11 @@ on-the-wire compatibility with the C `zck` tooling.
     preface/index/signatures and matches it against the lead's embedded value,
     so `ReadRemoteHeader` rejects a corrupt or truncated header before planning
     a download around its offsets.
+  - **data-checksum verification**: `DownloadDelta` hashes the reassembled body
+    with the lead's checksum type and matches it against the preface's
+    whole-file data checksum (skipped for an uncompressed-source file, where the
+    reference suppresses it), catching any inconsistency the per-chunk digests
+    would miss.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.
