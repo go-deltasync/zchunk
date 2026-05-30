@@ -36,33 +36,68 @@ func CompressChunk(ct CompressionType, dict, src []byte) ([]byte, error) {
 	}
 }
 
-// DecompressChunk reverses CompressChunk. dict is the decompressed dictionary
-// (chunk 0), or nil/empty for the dictionary chunk itself. decompressedLen is
-// the index entry's Length; the result must match it exactly.
-func DecompressChunk(ct CompressionType, dict, src []byte, decompressedLen uint64) ([]byte, error) {
-	switch ct {
-	case CompressionNone:
-		if uint64(len(src)) != decompressedLen {
-			return nil, fmt.Errorf("zchunk: stored chunk length %d != declared %d", len(src), decompressedLen)
-		}
-		return append([]byte(nil), src...), nil
-	case CompressionZstd:
+// chunkDecoder decompresses successive chunks of a single file, reusing one
+// zstd decoder (bound to the file's dictionary) across all of them rather than
+// constructing one per chunk — mirroring the reference, which reuses a single
+// ZSTD_DCtx. The zero decoder is unused for CompressionNone. A chunkDecoder is
+// not safe for concurrent use; build one per Extract.
+type chunkDecoder struct {
+	ct  CompressionType
+	dec *zstd.Decoder // nil for CompressionNone
+}
+
+// newChunkDecoder builds a decoder for ct bound to dict (the decompressed
+// dictionary, or nil/empty for none). ct must already be valid (see
+// CompressionType.valid); only none and zstd are handled.
+func newChunkDecoder(ct CompressionType, dict []byte) *chunkDecoder {
+	cd := &chunkDecoder{ct: ct}
+	if ct == CompressionZstd {
 		opts := []zstd.DOption{zstd.WithDecoderConcurrency(1)}
 		if len(dict) > 0 {
 			opts = append(opts, zstd.WithDecoderDictRaw(0, dict))
 		}
 		// NewReader only fails on invalid options; ours are static and valid.
-		dec, _ := zstd.NewReader(nil, opts...)
-		defer dec.Close()
-		out, err := dec.DecodeAll(src, nil)
-		if err != nil {
-			return nil, fmt.Errorf("zchunk: zstd decode: %w", err)
+		cd.dec, _ = zstd.NewReader(nil, opts...)
+	}
+	return cd
+}
+
+// decompress reverses one chunk's compression; the result must be exactly
+// decompressedLen bytes.
+func (cd *chunkDecoder) decompress(src []byte, decompressedLen uint64) ([]byte, error) {
+	if cd.ct == CompressionNone {
+		if uint64(len(src)) != decompressedLen {
+			return nil, fmt.Errorf("zchunk: stored chunk length %d != declared %d", len(src), decompressedLen)
 		}
-		if uint64(len(out)) != decompressedLen {
-			return nil, fmt.Errorf("zchunk: decompressed chunk length %d != declared %d", len(out), decompressedLen)
-		}
-		return out, nil
-	default:
+		return append([]byte(nil), src...), nil
+	}
+	out, err := cd.dec.DecodeAll(src, nil)
+	if err != nil {
+		return nil, fmt.Errorf("zchunk: zstd decode: %w", err)
+	}
+	if uint64(len(out)) != decompressedLen {
+		return nil, fmt.Errorf("zchunk: decompressed chunk length %d != declared %d", len(out), decompressedLen)
+	}
+	return out, nil
+}
+
+// close releases the underlying zstd decoder, if any.
+func (cd *chunkDecoder) close() {
+	if cd.dec != nil {
+		cd.dec.Close()
+	}
+}
+
+// DecompressChunk reverses CompressChunk for a single chunk. dict is the
+// decompressed dictionary (chunk 0), or nil/empty for the dictionary chunk
+// itself. decompressedLen is the index entry's Length; the result must match it
+// exactly. For decompressing many chunks of one file, prefer reusing a decoder
+// (see Extract) rather than calling this per chunk.
+func DecompressChunk(ct CompressionType, dict, src []byte, decompressedLen uint64) ([]byte, error) {
+	if !ct.valid() {
 		return nil, fmt.Errorf("zchunk: unsupported compression type %d", uint64(ct))
 	}
+	cd := newChunkDecoder(ct, dict)
+	defer cd.close()
+	return cd.decompress(src, decompressedLen)
 }

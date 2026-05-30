@@ -113,6 +113,15 @@ func TestExtractBadChecksumType(t *testing.T) {
 	}
 }
 
+func TestExtractBadCompressionType(t *testing.T) {
+	idx := &Index{ChunkChecksumType: SHA256, Chunks: []IndexEntry{
+		{Digest: make([]byte, 32), CompLength: 0, Length: 0},
+	}}
+	if _, err := idx.Extract(bytes.NewReader(nil), CompressionType(99), io.Discard); err == nil {
+		t.Fatal("Extract accepted an unknown compression type")
+	}
+}
+
 func TestExtractErrors(t *testing.T) {
 	digOf := func(b []byte) []byte { d, _ := SHA256.Sum(b); return d }
 	zero := make([]byte, 32)

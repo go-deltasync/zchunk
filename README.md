@@ -89,6 +89,57 @@ go install github.com/go-deltasync/zchunk/cmd/zchunk@latest
    path verifies our files decompress under `unzck`; the CI `compat` workflow
    installs the reference and the tests skip cleanly when it is absent).
 
+## Performance
+
+The library ships micro- and macro-benchmarks for the hot paths. Run the
+pure-Go set with:
+
+```bash
+go test -run '^$' -bench . -benchmem ./internal/zchunk/
+```
+
+Indicative results (Apple M4 Max, zstd default level, 64 KiB chunks for the
+codec benchmarks, 1 MiB / 32 KiB-chunk file for `Extract`/`WriteFile`):
+
+| Benchmark             | Throughput  | Allocs/op |
+|-----------------------|-------------|-----------|
+| `CompressChunkZstd`   | ~330 MB/s   | 37        |
+| `DecompressChunkZstd` | ~1.06 GB/s  | 27        |
+| `ChecksumSHA256`      | ~3.27 GB/s  | 1         |
+| `Extract` (whole file)| ~1.05 GB/s  | 137       |
+| `WriteFile`           | ~2.40 GB/s  | 20        |
+
+A `compat`-tagged benchmark compares our in-process `Extract` head-to-head with
+the C `unzck` tool on the *same* `zck`-produced file:
+
+```bash
+go test -tags=compat -run '^$' -bench BenchmarkCompatExtract ./internal/zchunk/
+```
+
+On a 4 MiB compressible input our in-process decode runs at ~2.3 GB/s versus
+~0.66 GB/s for shelling out to `unzck` (~3.4× faster end-to-end). The `unzck`
+figure includes process-spawn and pipe overhead, so it measures the realistic
+cost of invoking the C tool rather than its raw codec speed.
+
+**Implemented optimisation.** `Extract` reuses a single zstd decoder bound to
+the file's dictionary across all chunks, instead of constructing one per chunk
+— mirroring the reference's single `ZSTD_DCtx`. This cut a 32-chunk extract
+from 908 to 137 allocations/op (and ~3.9 MB → ~1.5 MB/op).
+
+**Proposed further improvements** (not yet implemented):
+
+- *Encoder reuse / pooling* on the write path, symmetric to the decoder reuse:
+  a high-level file builder should reuse one zstd encoder (e.g. via a
+  `sync.Pool`) across chunks rather than the ~1.8 MB/op a fresh
+  `CompressChunk` allocates today.
+- *Concurrent + coalesced range fetches* in `DownloadDelta`: fetch missing
+  chunks in parallel with a bounded worker pool, and merge adjacent missing
+  chunks into a single multi-range HTTP request to cut round-trips (as
+  `librepo` does).
+- *Scratch-buffer reuse* in `Extract`/`AssembleBody`: reuse a `[]byte` sized to
+  the largest chunk for the compressed read and the decode destination, to
+  shave the remaining per-chunk allocations.
+
 ## Conventions
 
 Part of the [go-deltasync](https://github.com/go-deltasync) org: single static

@@ -24,12 +24,13 @@ import (
 	"testing"
 )
 
-// lookTool skips the test unless name is on PATH, returning its full path.
-func lookTool(t *testing.T, name string) string {
-	t.Helper()
+// lookTool skips the test/benchmark unless name is on PATH, returning its full
+// path.
+func lookTool(tb testing.TB, name string) string {
+	tb.Helper()
 	p, err := exec.LookPath(name)
 	if err != nil {
-		t.Skipf("%s not on PATH (%v) — install via `apt-get install zchunk`", name, err)
+		tb.Skipf("%s not on PATH (%v) — install via `apt-get install zchunk` / `brew install zchunk`", name, err)
 	}
 	return p
 }
@@ -166,4 +167,67 @@ func TestCompatOurFileToUnzck(t *testing.T) {
 	if !bytes.Equal(got, orig) {
 		t.Fatalf("unzck output differs from original (got %d bytes, want %d)", len(got), len(orig))
 	}
+}
+
+// BenchmarkCompatExtract compares our in-process Extract against the C `unzck`
+// tool decompressing the same zck-produced file. The "go" sub-benchmark times
+// pure in-process decode; the "unzck" sub-benchmark times the reference and
+// therefore includes process-spawn overhead — the realistic cost of shelling
+// out to the C tool, not a pure codec comparison.
+//
+// Run with: go test -tags=compat -bench BenchmarkCompatExtract -run '^$' ./internal/zchunk/
+func BenchmarkCompatExtract(b *testing.B) {
+	zck := lookTool(b, "zck")
+	unzck := lookTool(b, "unzck")
+
+	dir := b.TempDir()
+	orig := benchData(4 << 20) // 4 MiB of compressible content
+	src := filepath.Join(dir, "data.bin")
+	if err := os.WriteFile(src, orig, 0o644); err != nil {
+		b.Fatal(err)
+	}
+	zckPath := filepath.Join(dir, "data.zck")
+	if out, err := exec.Command(zck, "-o", zckPath, src).CombinedOutput(); err != nil {
+		b.Fatalf("zck failed: %v\n%s", err, out)
+	}
+	zckBytes, err := os.ReadFile(zckPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("go", func(b *testing.B) {
+		b.SetBytes(int64(len(orig)))
+		for i := 0; i < b.N; i++ {
+			r := bytes.NewReader(zckBytes)
+			lead, err := ReadLead(r)
+			if err != nil {
+				b.Fatal(err)
+			}
+			pre, err := ReadPreface(r, lead.ChecksumType)
+			if err != nil {
+				b.Fatal(err)
+			}
+			idx, err := ReadIndex(r, pre.UncompressedSource())
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := ReadSignatures(r); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := idx.Extract(r, pre.CompressionType, io.Discard); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("unzck", func(b *testing.B) {
+		b.SetBytes(int64(len(orig)))
+		for i := 0; i < b.N; i++ {
+			cmd := exec.Command(unzck, "-c", zckPath)
+			cmd.Stdout = io.Discard
+			if err := cmd.Run(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

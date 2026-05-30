@@ -19,6 +19,9 @@ func (idx *Index) Extract(r io.Reader, ct CompressionType, out io.Writer) (int64
 	if _, err := idx.ChunkChecksumType.Size(); err != nil {
 		return 0, err
 	}
+	if !ct.valid() {
+		return 0, fmt.Errorf("zchunk: unsupported compression type %d", uint64(ct))
+	}
 	if len(idx.Chunks) == 0 {
 		return 0, nil
 	}
@@ -26,14 +29,20 @@ func (idx *Index) Extract(r io.Reader, ct CompressionType, out io.Writer) (int64
 	// Chunk 0 is the dictionary; decompress it (with no dictionary of its own)
 	// for use as the zstd dictionary of the remaining chunks. An empty dict
 	// (zero lengths, conventionally an all-zero digest) yields nil.
-	dict, err := idx.readChunk(r, ct, nil, idx.Chunks[0], 0)
+	dictDec := newChunkDecoder(ct, nil)
+	dict, err := idx.readChunk(r, dictDec, idx.Chunks[0], 0)
+	dictDec.close()
 	if err != nil {
 		return 0, err
 	}
 
+	// Reuse a single decoder bound to the dictionary for every data chunk,
+	// instead of constructing one per chunk (as the reference reuses one DCtx).
+	dec := newChunkDecoder(ct, dict)
+	defer dec.close()
 	var written int64
 	for i := 1; i < len(idx.Chunks); i++ {
-		data, err := idx.readChunk(r, ct, dict, idx.Chunks[i], i)
+		data, err := idx.readChunk(r, dec, idx.Chunks[i], i)
 		if err != nil {
 			return written, err
 		}
@@ -52,7 +61,7 @@ func (idx *Index) Extract(r io.Reader, ct CompressionType, out io.Writer) (int64
 // 0) is treated as empty content with no verification, since the reference
 // leaves an empty dictionary's digest all-zero. n is the chunk number, for
 // error messages. The chunk checksum type must already be validated.
-func (idx *Index) readChunk(r io.Reader, ct CompressionType, dict []byte, e IndexEntry, n int) ([]byte, error) {
+func (idx *Index) readChunk(r io.Reader, dec *chunkDecoder, e IndexEntry, n int) ([]byte, error) {
 	comp := make([]byte, e.CompLength)
 	if _, err := io.ReadFull(r, comp); err != nil {
 		return nil, fmt.Errorf("zchunk: read chunk %d body: %w", n, err)
@@ -66,7 +75,7 @@ func (idx *Index) readChunk(r io.Reader, ct CompressionType, dict []byte, e Inde
 	if !bytes.Equal(sum, e.Digest) {
 		return nil, fmt.Errorf("zchunk: chunk %d digest mismatch", n)
 	}
-	data, err := DecompressChunk(ct, dict, comp, e.Length)
+	data, err := dec.decompress(comp, e.Length)
 	if err != nil {
 		return nil, fmt.Errorf("zchunk: chunk %d: %w", n, err)
 	}
