@@ -50,6 +50,10 @@ on-the-wire compatibility with the C `zck` tooling.
     index, signatures, body), computing the data checksum over the body and the
     lead's header checksum, so a written file round-trips through the readers and
     `Extract`.
+  - **delta planning** (`PlanDelta`): diffs a target index against a local one by
+    compressed digest, classifying every target chunk as reusable-from-local or
+    must-fetch and reporting the reused/fetched byte totals — the core of the
+    HTTP-range delta download.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.
