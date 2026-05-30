@@ -146,12 +146,37 @@ func DownloadDelta(remote RangeReader, localIndex *Index, localBody io.ReaderAt,
 	if err != nil {
 		return 0, err
 	}
+	return DownloadDeltaWithHeader(rh, remote, localIndex, localBody, out)
+}
+
+// DownloadDeltaWithHeader reconstructs a full zchunk file into out from an
+// already-parsed header rh and a body source, fetching only the chunks missing
+// locally. It is the engine behind DownloadDelta, but accepts the header
+// separately so a client that fetched a standalone (detached) header — via
+// ReadDetachedHeader — can drive the download from it: when rh describes a
+// detached header (lead ID "\0ZHR1"), the embedded magic ("\0ZCK1") is restored
+// so the reconstructed file is a normal full file rather than a detached one.
+//
+// remoteBody serves absolute byte-range reads of the file's body region;
+// rh.BodyOffset locates where the body begins, so remoteBody is the same
+// absolute-offset reader used to fetch the header. localIndex/localBody describe
+// the local copy whose matching chunks are reused. The data checksum is verified
+// exactly as in DownloadDelta. It returns the number of bytes written.
+func DownloadDeltaWithHeader(rh *RemoteHeader, remoteBody RangeReader, localIndex *Index, localBody io.ReaderAt, out io.Writer) (int64, error) {
 	plan, err := PlanDelta(localIndex, rh.Index)
 	if err != nil {
 		return 0, err
 	}
 
-	hn, err := out.Write(rh.HeaderBytes)
+	// Reproduce a full-file header: a detached header is byte-identical to an
+	// embedded one except for its 5-byte magic, so swap "\0ZHR1" back to
+	// "\0ZCK1" (its checksum is computed with the embedded magic regardless).
+	headerBytes := rh.HeaderBytes
+	if rh.Lead.Detached {
+		headerBytes = append([]byte(Magic), rh.HeaderBytes[len(DetachedMagic):]...)
+	}
+
+	hn, err := out.Write(headerBytes)
 	written := int64(hn)
 	if err != nil {
 		return written, fmt.Errorf("zchunk: write header: %w", err)
@@ -167,7 +192,7 @@ func DownloadDelta(remote RangeReader, localIndex *Index, localBody io.ReaderAt,
 		bodyOut = io.MultiWriter(out, h)
 	}
 
-	body := offsetRange{rr: remote, base: rh.BodyOffset}
+	body := offsetRange{rr: remoteBody, base: rh.BodyOffset}
 	bn, err := plan.AssembleBody(rh.Index, localBody, body, bodyOut)
 	written += bn
 	if err != nil {

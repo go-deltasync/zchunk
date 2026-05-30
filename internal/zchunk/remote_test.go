@@ -92,6 +92,40 @@ func TestDownloadDelta(t *testing.T) {
 	}
 }
 
+func TestDownloadDeltaWithDetachedHeader(t *testing.T) {
+	target, local, targetBody, localBody := mixedSetup(t)
+	// The full file we expect to reconstruct (embedded magic, normal layout).
+	file := buildFullFile(t, target, targetBody)
+
+	// A client fetches the standalone detached header on its own...
+	pre := &Preface{CompressionType: CompressionNone}
+	var hbuf bytes.Buffer
+	if _, err := WriteDetachedHeader(&hbuf, SHA256, pre, target, nil, targetBody); err != nil {
+		t.Fatalf("WriteDetachedHeader: %v", err)
+	}
+	rh, err := ReadDetachedHeader(bytes.NewReader(hbuf.Bytes()))
+	if err != nil {
+		t.Fatalf("ReadDetachedHeader: %v", err)
+	}
+	if !rh.Lead.Detached {
+		t.Fatal("expected a detached lead")
+	}
+
+	// ...then drives a delta download from it, with the body served at the same
+	// absolute offsets as in the full file (rh.BodyOffset locates the body).
+	var out bytes.Buffer
+	n, err := DownloadDeltaWithHeader(rh, byteRange{data: file}, local, bytes.NewReader(localBody), &out)
+	if err != nil {
+		t.Fatalf("DownloadDeltaWithHeader: %v", err)
+	}
+	// The reconstructed file must be a normal full file (embedded "\0ZCK1"),
+	// byte-identical to the one produced directly by WriteFile.
+	if int(n) != len(file) || !bytes.Equal(out.Bytes(), file) {
+		t.Fatalf("reconstruction mismatch: n=%d, want %d, equal=%v",
+			n, len(file), bytes.Equal(out.Bytes(), file))
+	}
+}
+
 func TestReadRemoteHeaderErrors(t *testing.T) {
 	target, _, targetBody, _ := mixedSetup(t)
 	file := buildFullFile(t, target, targetBody)
