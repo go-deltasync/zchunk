@@ -84,7 +84,10 @@ go install github.com/go-deltasync/zchunk/cmd/zchunk@latest
 4. ~~zstd chunk (de)compression via a pure-Go codec.~~ ✓
 5. ~~HTTP-range delta download: diff a remote index against a local file and
    fetch only the missing chunks.~~ ✓
-6. `-tags=compat` interop tests against the C `zck`/`unzck`/`zck_delta_size`.
+6. `-tags=compat` interop tests against the C `zck`/`unzck` (in progress: the
+   read path verifies `zck`-produced files extract correctly, and the write
+   path verifies our files decompress under `unzck`; the CI `compat` workflow
+   installs the reference and the tests skip cleanly when it is absent).
 
 ## Conventions
 

@@ -1,0 +1,34 @@
+name: compat
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    name: cross-impl compat (linux / upstream zchunk)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          check-latest: true
+
+      - name: Install upstream zchunk (C reference)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zchunk
+          zck --version || true
+          unzck --version || true
+
+      - name: Compat tests
+        run: go test -v -tags=compat ./internal/zchunk/...
