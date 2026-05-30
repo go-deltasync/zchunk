@@ -147,3 +147,63 @@ func TestWriteFileErrors(t *testing.T) {
 		t.Fatal("WriteFile ignored a write error")
 	}
 }
+
+func TestWriteDetachedHeaderRoundTrip(t *testing.T) {
+	dict := bytes.Repeat([]byte("DICT-"), 8)
+	data := [][]byte{
+		append(append([]byte(nil), dict...), []byte(" tail")...),
+		[]byte("second chunk payload here"),
+	}
+	idx, body := buildBody(t, SHA256, CompressionZstd, false, dict, data)
+	pre := &Preface{CompressionType: CompressionZstd}
+
+	var buf bytes.Buffer
+	n, err := WriteDetachedHeader(&buf, SHA256, pre, idx, nil, body)
+	if err != nil {
+		t.Fatalf("WriteDetachedHeader: %v", err)
+	}
+	detached := buf.Bytes()
+	if int(n) != len(detached) {
+		t.Fatalf("n=%d, buffer=%d", n, len(detached))
+	}
+
+	// The detached file carries the "\0ZHR1" magic and no body.
+	rh, err := ReadDetachedHeader(bytes.NewReader(detached))
+	if err != nil {
+		t.Fatalf("ReadDetachedHeader: %v", err)
+	}
+	if !rh.Lead.Detached {
+		t.Fatal("expected a detached lead")
+	}
+	if int(rh.BodyOffset) != len(detached) {
+		t.Fatalf("BodyOffset=%d, want %d (no body in a detached header)", rh.BodyOffset, len(detached))
+	}
+	// The data checksum still describes the original body.
+	wantDC, _ := SHA256.Sum(body)
+	if !bytes.Equal(rh.Preface.DataChecksum, wantDC) {
+		t.Fatal("detached header data checksum does not describe the body")
+	}
+	// The same header, embedded, must share the byte layout after the magic.
+	var full bytes.Buffer
+	if _, err := WriteFile(&full, SHA256, pre, idx, nil, body); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	embedded := full.Bytes()
+	if !bytes.Equal(detached[len(DetachedMagic):], embedded[len(Magic):len(detached)]) {
+		t.Fatal("detached and embedded headers differ beyond the magic")
+	}
+}
+
+func TestWriteDetachedHeaderErrors(t *testing.T) {
+	idx, body := buildBody(t, SHA256, CompressionZstd, false, nil, [][]byte{[]byte("x")})
+	goodPre := &Preface{CompressionType: CompressionZstd}
+
+	// Unknown overall checksum type (propagated from buildHeader).
+	if _, err := WriteDetachedHeader(io.Discard, 99, goodPre, idx, nil, body); err == nil {
+		t.Fatal("WriteDetachedHeader accepted unknown overall checksum type")
+	}
+	// Underlying writer fails.
+	if _, err := WriteDetachedHeader(&failWriter{failAt: 1}, SHA256, goodPre, idx, nil, body); err == nil {
+		t.Fatal("WriteDetachedHeader ignored a write error")
+	}
+}

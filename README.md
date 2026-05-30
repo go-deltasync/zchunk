@@ -13,9 +13,8 @@ on-the-wire compatibility with the C `zck` tooling.
 > tested at 100 % coverage: lead/preface/chunk-index/signature parsing and
 > serialisation, per-chunk zstd (de)compression against the dictionary,
 > whole-file extraction and assembly, delta planning, HTTP-range delta
-> download, and header/data-checksum verification. Remaining work is interop
-> hardening against the C `zck` tooling (`-tags=compat`) and detached-header
-> support.
+> download, header/data-checksum verification, and detached headers. Remaining
+> work is further interop hardening against the C `zck` tooling (`-tags=compat`).
 
 ## What works today
 
@@ -71,6 +70,11 @@ on-the-wire compatibility with the C `zck` tooling.
     whole-file data checksum (skipped for an uncompressed-source file, where the
     reference suppresses it), catching any inconsistency the per-chunk digests
     would miss.
+  - **detached headers** (`WriteDetachedHeader` / `ReadDetachedHeader`): writes
+    and reads a standalone header (the `\0ZHR1` magic, no body) whose checksum
+    is computed with the embedded magic substituted, so a client can fetch the
+    small header on its own and learn a file's chunk layout — accepted by the
+    reference's `zck_read_header`.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.

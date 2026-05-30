@@ -186,6 +186,60 @@ func writeOurZck(t *testing.T, path string, content []byte) {
 	}
 }
 
+// TestCompatOurDetachedHeaderToZckReadHeader builds a detached header with our
+// writer and asks the C `zck_read_header` tool to parse and validate it,
+// proving our "\0ZHR1" magic and the Magic-substituted header checksum match
+// what the reference expects.
+func TestCompatOurDetachedHeaderToZckReadHeader(t *testing.T) {
+	zrh := lookTool(t, "zck_read_header")
+
+	dir := t.TempDir()
+	orig := randBytes(t, 120*1024)
+
+	const chunkSize = 16 * 1024
+	idx := &Index{ChunkChecksumType: SHA256}
+	idx.Chunks = append(idx.Chunks, IndexEntry{Digest: make([]byte, 32)}) // empty dict
+	var body []byte
+	for off := 0; off < len(orig); off += chunkSize {
+		end := off + chunkSize
+		if end > len(orig) {
+			end = len(orig)
+		}
+		comp, err := CompressChunk(CompressionZstd, nil, orig[off:end])
+		if err != nil {
+			t.Fatalf("CompressChunk: %v", err)
+		}
+		digest, err := SHA256.Sum(comp)
+		if err != nil {
+			t.Fatalf("Sum: %v", err)
+		}
+		idx.Chunks = append(idx.Chunks, IndexEntry{Digest: digest, CompLength: uint64(len(comp)), Length: uint64(end - off)})
+		body = append(body, comp...)
+	}
+
+	hdrPath := filepath.Join(dir, "ours.zck.header")
+	f, err := os.Create(hdrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre := &Preface{CompressionType: CompressionZstd}
+	if _, err := WriteDetachedHeader(f, SHA256, pre, idx, nil, body); err != nil {
+		f.Close()
+		t.Fatalf("WriteDetachedHeader: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := exec.Command(zrh, hdrPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("zck_read_header failed: %v\n%s", err, out)
+	}
+	if !bytes.Contains(out, []byte("detached header")) {
+		t.Fatalf("zck_read_header did not recognise a detached header:\n%s", out)
+	}
+}
+
 // TestCompatOurFileToUnzck builds a zchunk file with our writer/codec and asks
 // the C `unzck` tool to decompress it — byte-identical output is the pass
 // condition, exercising our write path against the reference reader.

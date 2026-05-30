@@ -182,6 +182,37 @@ func TestReadRemoteHeaderErrors(t *testing.T) {
 	})
 }
 
+func TestReadDetachedHeaderErrors(t *testing.T) {
+	target, _, targetBody, _ := mixedSetup(t)
+	pre := &Preface{CompressionType: CompressionNone}
+	var buf bytes.Buffer
+	if _, err := WriteDetachedHeader(&buf, SHA256, pre, target, nil, targetBody); err != nil {
+		t.Fatalf("WriteDetachedHeader: %v", err)
+	}
+	detached := buf.Bytes()
+
+	t.Run("bad-lead", func(t *testing.T) {
+		if _, err := ReadDetachedHeader(bytes.NewReader([]byte("nope"))); err == nil {
+			t.Fatal("expected lead error")
+		}
+	})
+
+	t.Run("truncated-header-body", func(t *testing.T) {
+		// A valid lead but the header body is cut short.
+		if _, err := ReadDetachedHeader(bytes.NewReader(detached[:len(detached)-1])); err == nil {
+			t.Fatal("expected truncated header error")
+		}
+	})
+
+	t.Run("checksum-mismatch", func(t *testing.T) {
+		corrupt := append([]byte(nil), detached...)
+		corrupt[len(corrupt)-1] ^= 0xff // flip a header-body byte
+		if _, err := ReadDetachedHeader(bytes.NewReader(corrupt)); err == nil {
+			t.Fatal("expected header checksum mismatch")
+		}
+	})
+}
+
 func TestDownloadDeltaErrors(t *testing.T) {
 	target, local, targetBody, localBody := mixedSetup(t)
 	file := buildFullFile(t, target, targetBody)

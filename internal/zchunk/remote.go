@@ -55,8 +55,36 @@ func ReadRemoteHeader(remote RangeReader) (*RemoteHeader, error) {
 		return nil, fmt.Errorf("zchunk: fetch header: got %d bytes, want %d",
 			len(hdrBody), lead.HeaderSize)
 	}
+	return parseHeader(lead, prefix[:leadLen], hdrBody)
+}
+
+// ReadDetachedHeader reads a detached zchunk header (lead ID "\0ZHR1", followed
+// by preface/index/signatures and no body) from r, consuming exactly the
+// header's bytes. It verifies the header against its embedded checksum and
+// returns the parsed header; BodyOffset is the offset at which the body begins
+// in the corresponding full file, so the result can drive a delta download of
+// that file. An embedded-magic header is accepted too (its trailing body, if
+// any, is left unread).
+func ReadDetachedHeader(r io.Reader) (*RemoteHeader, error) {
+	// Capture the lead's raw bytes (preserving its actual magic) while parsing.
+	var leadBuf bytes.Buffer
+	lead, err := ReadLead(io.TeeReader(r, &leadBuf))
+	if err != nil {
+		return nil, err
+	}
+	hdrBody := make([]byte, lead.HeaderSize)
+	if _, err := io.ReadFull(r, hdrBody); err != nil {
+		return nil, fmt.Errorf("zchunk: read detached header: %w", err)
+	}
+	return parseHeader(lead, leadBuf.Bytes(), hdrBody)
+}
+
+// parseHeader verifies hdrBody against lead's embedded header checksum, parses
+// the preface/index/signatures from it, and assembles a RemoteHeader. leadBytes
+// is the verbatim lead (used to reproduce HeaderBytes and locate the body).
+func parseHeader(lead *Lead, leadBytes, hdrBody []byte) (*RemoteHeader, error) {
 	// Validate the header against its embedded checksum before trusting any of
-	// the index offsets/digests we are about to plan a download around.
+	// the index offsets/digests a caller will plan a download around.
 	if err := lead.VerifyHeader(hdrBody); err != nil {
 		return nil, err
 	}
@@ -75,7 +103,8 @@ func ReadRemoteHeader(remote RangeReader) (*RemoteHeader, error) {
 		return nil, err
 	}
 
-	header := append([]byte(nil), prefix[:leadLen]...)
+	header := make([]byte, 0, len(leadBytes)+len(hdrBody))
+	header = append(header, leadBytes...)
 	header = append(header, hdrBody...)
 
 	return &RemoteHeader{
@@ -84,7 +113,7 @@ func ReadRemoteHeader(remote RangeReader) (*RemoteHeader, error) {
 		Index:       idx,
 		Signatures:  sigs,
 		HeaderBytes: header,
-		BodyOffset:  int64(leadLen) + int64(lead.HeaderSize),
+		BodyOffset:  int64(len(leadBytes)) + int64(len(hdrBody)),
 	}, nil
 }
 
