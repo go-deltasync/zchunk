@@ -92,6 +92,12 @@ func reportLead(out io.Writer, name string, r io.Reader) error {
 		fmt.Fprintf(out, " (dict: %d -> %d bytes)", d.CompLength, d.Length)
 	}
 	fmt.Fprintln(out)
+
+	sigs, err := zchunk.ReadSignatures(r)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "  signatures:    %d\n", sigs.Count)
 	return nil
 }
 
