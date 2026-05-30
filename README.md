@@ -36,6 +36,10 @@ on-the-wire compatibility with the C `zck` tooling.
   - the **signature section** parser/serialiser (`ReadSignatures` /
     `Signatures.WriteTo`): the signature count, rejecting any non-zero value
     since no signature type is defined yet (matching the reference).
+  - the **chunk codec** (`CompressChunk` / `DecompressChunk`): per-chunk
+    `none`/`zstd` (de)compression via the pure-Go `klauspost/compress`, including
+    raw-dictionary support so chunks can be coded against chunk 0 (the dict),
+    matching the reference's `ZSTD_compress_usingDict`.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk --version`.
@@ -54,7 +58,7 @@ go install github.com/go-deltasync/zchunk/cmd/zchunk@latest
 1. ~~Lead parsing (checksum type, header size, header checksum).~~ ✓
 2. ~~Preface (data checksum, flags, compression type, optional elements).~~ ✓
 3. ~~Chunk index (per-chunk digest, compressed/uncompressed lengths) + signatures.~~ ✓
-4. zstd chunk (de)compression via a pure-Go codec.
+4. ~~zstd chunk (de)compression via a pure-Go codec.~~ ✓
 5. HTTP-range delta download: diff a remote index against a local file and
    fetch only the missing chunks.
 6. `-tags=compat` interop tests against the C `zck`/`unzck`/`zck_delta_size`.
