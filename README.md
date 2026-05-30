@@ -75,9 +75,13 @@ on-the-wire compatibility with the C `zck` tooling.
     is computed with the embedded magic substituted, so a client can fetch the
     small header on its own and learn a file's chunk layout — accepted by the
     reference's `zck_read_header`.
+- `zchunk create [--chunk-size N] [--compression none|zstd] FILE OUT`: builds a
+  zchunk file from FILE using fixed-size chunks (SHA-256), producing output that
+  extracts with `zchunk extract` and decompresses with the reference `unzck`.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.
+- `zchunk header FILE OUT`: writes FILE's header on its own as a detached header.
 - `zchunk download [--local FILE] URL OUT`: delta-downloads URL into OUT,
   reusing chunks from a local copy and fetching only the rest over HTTP range.
 - `zchunk --version`.

@@ -2,10 +2,10 @@
 // content-defined-chunked container that supports delta downloads over HTTP
 // range requests (as used by Fedora's DNF/librepo).
 //
-// This binary is in early scaffolding: it currently exposes the build version
-// and an `info` command that recognises a zchunk file by its lead magic. The
-// chunk index, zstd handling and range-based delta download land here as the
-// format work progresses.
+// Commands: `create` builds a .zck file from a plain input; `extract`
+// reconstructs the content; `info` reports a file's lead/preface/index;
+// `header` emits a standalone detached header; and `download` delta-downloads a
+// remote file over HTTP range requests, reusing chunks from a local copy.
 package main
 
 import (
@@ -36,11 +36,94 @@ func newRoot() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.AddCommand(createCmd())
 	root.AddCommand(infoCmd())
 	root.AddCommand(extractCmd())
 	root.AddCommand(downloadCmd())
 	root.AddCommand(headerCmd())
 	return root
+}
+
+func createCmd() *cobra.Command {
+	var chunkSize int
+	var compression string
+	cmd := &cobra.Command{
+		Use:   "create [flags] FILE OUT",
+		Short: "Build a zchunk file from FILE, writing it to OUT",
+		Long: "Split FILE into fixed-size chunks, compress each one and write a " +
+			"complete zchunk file (lead, preface, index, signatures, body) to OUT. " +
+			"The result extracts with `zchunk extract` and decompresses with the " +
+			"reference `unzck`. Chunking is fixed-size; content-defined chunking " +
+			"lands with the shared chunker module.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ct, err := parseCompression(compression)
+			if err != nil {
+				return err
+			}
+			if chunkSize <= 0 {
+				return fmt.Errorf("--chunk-size must be positive, got %d", chunkSize)
+			}
+			f, err := os.Open(args[0])
+			if err != nil {
+				return fmt.Errorf("open %s: %w", args[0], err)
+			}
+			defer f.Close()
+			out, err := os.Create(args[1])
+			if err != nil {
+				return fmt.Errorf("create %s: %w", args[1], err)
+			}
+			defer out.Close()
+			if err := create(f, out, chunkSize, ct); err != nil {
+				return err
+			}
+			return out.Close()
+		},
+	}
+	cmd.Flags().IntVar(&chunkSize, "chunk-size", 64*1024, "fixed chunk size in bytes")
+	cmd.Flags().StringVar(&compression, "compression", "zstd", "chunk compression: none or zstd")
+	return cmd
+}
+
+// create reads in in fixed-size chunks, compressing each through a single reused
+// encoder (an empty dictionary), and writes a complete zchunk file to out with
+// SHA-256 checksums.
+func create(in io.Reader, out io.Writer, chunkSize int, ct zchunk.CompressionType) error {
+	b, err := zchunk.NewBuilder(ct, zchunk.SHA256, nil)
+	if err != nil {
+		return err
+	}
+	defer b.Close()
+
+	buf := make([]byte, chunkSize)
+	for {
+		n, err := io.ReadFull(in, buf)
+		if n > 0 {
+			b.AddChunk(buf[:n])
+		}
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read input: %w", err)
+		}
+	}
+
+	pre := &zchunk.Preface{CompressionType: ct}
+	_, err = b.WriteFile(out, zchunk.SHA256, pre, nil)
+	return err
+}
+
+// parseCompression maps a CLI compression name to its CompressionType.
+func parseCompression(name string) (zchunk.CompressionType, error) {
+	switch name {
+	case "none":
+		return zchunk.CompressionNone, nil
+	case "zstd":
+		return zchunk.CompressionZstd, nil
+	default:
+		return 0, fmt.Errorf("unknown compression %q (want none or zstd)", name)
+	}
 }
 
 func headerCmd() *cobra.Command {
