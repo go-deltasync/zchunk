@@ -3,17 +3,82 @@ package zchunk
 import (
 	"bytes"
 	"io"
+	"sync"
 	"testing"
 )
 
-// fakeRange serves byte ranges from an in-memory target body.
+// allRemoteSetup builds a target whose three data chunks (1..3) are all absent
+// from the local copy, so PlanDelta marks them must-fetch. Since they are
+// consecutive in the body they coalesce into a single contiguous range.
+func allRemoteSetup(t *testing.T) (target, local *Index, targetBody []byte) {
+	t.Helper()
+	c1 := []byte("alpha-chunk-bytes")
+	c2 := []byte("bravo-chunk-bytes-longer")
+	c3 := []byte("charlie-chunk")
+	targetBody = append(append(append([]byte(nil), c1...), c2...), c3...)
+	target = &Index{ChunkChecksumType: SHA256, Chunks: []IndexEntry{
+		{Digest: make([]byte, 32), CompLength: 0, Length: 0},
+		{Digest: sum256(t, c1), CompLength: uint64(len(c1)), Length: 1},
+		{Digest: sum256(t, c2), CompLength: uint64(len(c2)), Length: 1},
+		{Digest: sum256(t, c3), CompLength: uint64(len(c3)), Length: 1},
+	}}
+	// Empty local index: nothing reusable.
+	local = &Index{ChunkChecksumType: SHA256}
+	return
+}
+
+// TestAssembleBodyCoalesced checks that a run of consecutive must-fetch chunks
+// is fetched in ONE range request and split back into its constituent chunks.
+func TestAssembleBodyCoalesced(t *testing.T) {
+	target, local, targetBody := allRemoteSetup(t)
+	plan, err := PlanDelta(local, target)
+	if err != nil {
+		t.Fatalf("PlanDelta: %v", err)
+	}
+	fr := &fakeRange{body: targetBody}
+	var out bytes.Buffer
+	n, err := plan.AssembleBody(target, bytes.NewReader(nil), fr, &out)
+	if err != nil {
+		t.Fatalf("AssembleBody: %v", err)
+	}
+	if int(n) != len(targetBody) || !bytes.Equal(out.Bytes(), targetBody) {
+		t.Fatalf("assembled body mismatch (n=%d)", n)
+	}
+	if fr.calls != 1 {
+		t.Fatalf("expected one coalesced range request, got %d", fr.calls)
+	}
+}
+
+// TestAssembleBodyRunChunkError exercises the per-chunk error path inside the
+// split loop of a multi-chunk remote run (the second chunk's digest is wrong).
+func TestAssembleBodyRunChunkError(t *testing.T) {
+	target, local, targetBody := allRemoteSetup(t)
+	plan, err := PlanDelta(local, target)
+	if err != nil {
+		t.Fatalf("PlanDelta: %v", err)
+	}
+	bad := &Index{ChunkChecksumType: SHA256, Chunks: append([]IndexEntry(nil), target.Chunks...)}
+	bad.Chunks[2].Digest = bytes.Repeat([]byte{0xff}, 32) // 2nd chunk of the run
+	if _, err := plan.AssembleBody(bad, bytes.NewReader(nil), &fakeRange{body: targetBody}, io.Discard); err == nil {
+		t.Fatal("expected digest mismatch within the run")
+	}
+}
+
+// fakeRange serves byte ranges from an in-memory target body. It counts the
+// number of ReadRange calls so tests can assert that consecutive must-fetch
+// chunks are coalesced into a single request.
 type fakeRange struct {
 	body  []byte
 	err   error // returned unconditionally when non-nil
 	short bool  // when true, returns one fewer byte than requested
+	mu    sync.Mutex
+	calls int
 }
 
 func (f *fakeRange) ReadRange(offset, length int64) ([]byte, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}

@@ -121,10 +121,19 @@ On a 4 MiB compressible input our in-process decode runs at ~2.3 GB/s versus
 figure includes process-spawn and pipe overhead, so it measures the realistic
 cost of invoking the C tool rather than its raw codec speed.
 
-**Implemented optimisation.** `Extract` reuses a single zstd decoder bound to
-the file's dictionary across all chunks, instead of constructing one per chunk
-— mirroring the reference's single `ZSTD_DCtx`. This cut a 32-chunk extract
-from 908 to 137 allocations/op (and ~3.9 MB → ~1.5 MB/op).
+**Implemented optimisations.**
+
+- *Single decoder per file.* `Extract` reuses one zstd decoder bound to the
+  file's dictionary across all chunks, instead of constructing one per chunk —
+  mirroring the reference's single `ZSTD_DCtx`. This cut a 32-chunk extract from
+  908 to 137 allocations/op (and ~3.9 MB → ~1.5 MB/op).
+- *Coalesced + concurrent range fetches.* `AssembleBody` merges every run of
+  consecutive must-fetch chunks into a single contiguous range request (target
+  chunks are laid out back-to-back in the body, so a run is one byte range),
+  then fetches the runs in parallel with a bounded worker pool
+  (`defaultFetchConcurrency`) while still writing output strictly in source
+  order. This cuts both the number of HTTP round-trips and their wall-clock
+  latency, as `librepo` does.
 
 **Proposed further improvements** (not yet implemented):
 
@@ -132,10 +141,6 @@ from 908 to 137 allocations/op (and ~3.9 MB → ~1.5 MB/op).
   a high-level file builder should reuse one zstd encoder (e.g. via a
   `sync.Pool`) across chunks rather than the ~1.8 MB/op a fresh
   `CompressChunk` allocates today.
-- *Concurrent + coalesced range fetches* in `DownloadDelta`: fetch missing
-  chunks in parallel with a bounded worker pool, and merge adjacent missing
-  chunks into a single multi-range HTTP request to cut round-trips (as
-  `librepo` does).
 - *Scratch-buffer reuse* in `Extract`/`AssembleBody`: reuse a `[]byte` sized to
   the largest chunk for the compressed read and the decode destination, to
   shave the remaining per-chunk allocations.
