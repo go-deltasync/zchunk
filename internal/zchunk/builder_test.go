@@ -114,4 +114,7 @@ func TestNewBuilderErrors(t *testing.T) {
 	if _, err := NewBuilder(CompressionZstd, 99, nil); err == nil {
 		t.Fatal("NewBuilder accepted an unknown chunk checksum type")
 	}
+	if _, err := NewBuilder(CompressionZstd, SHA256, malformedDict()); err == nil {
+		t.Fatal("NewBuilder accepted a malformed dictionary")
+	}
 }

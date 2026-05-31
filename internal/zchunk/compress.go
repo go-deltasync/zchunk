@@ -1,6 +1,7 @@
 package zchunk
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/klauspost/compress/zstd"
@@ -9,10 +10,28 @@ import (
 // Each zchunk body chunk is a single self-contained unit: with CompressionNone
 // it is stored verbatim, and with CompressionZstd it is one independent zstd
 // frame. The dictionary is simply chunk 0's decompressed contents; chunks other
-// than the dictionary are (de)compressed against it as a raw zstd dictionary,
-// exactly as the reference does via ZSTD_compress_usingDict /
-// ZSTD_decompress_usingDDict. The dictionary chunk itself is processed with an
-// empty dict.
+// than the dictionary are (de)compressed against it, exactly as the reference
+// does via ZSTD_compress_usingDict / ZSTD_decompress_usingDDict. The dictionary
+// chunk itself is processed with an empty dict.
+//
+// A dictionary is loaded in zstd's auto mode (ZSTD_dct_auto, what the reference
+// relies on): a trained dictionary — the structured artifact `zstd --train` /
+// `zck_gen_zdict` produce, recognisable by its magic — is loaded with its
+// entropy tables and dictID, while any other bytes are used as a raw content
+// prefix. Matching auto mode is what lets us decode reference dict-based files
+// (whose frames reference the trained dictionary's ID) and emit files the
+// reference reads back.
+
+// zstdDictMagic is the little-endian byte prefix of a structured zstd dictionary
+// (ZSTD_MAGIC_DICTIONARY = 0xEC30A437). A dictionary chunk beginning with it is a
+// trained dictionary to load structurally; anything else is raw content.
+var zstdDictMagic = []byte{0x37, 0xA4, 0x30, 0xEC}
+
+// isStructuredDict reports whether dict is a trained (structured) zstd
+// dictionary rather than raw content, by its leading magic.
+func isStructuredDict(dict []byte) bool {
+	return len(dict) >= len(zstdDictMagic) && bytes.Equal(dict[:len(zstdDictMagic)], zstdDictMagic)
+}
 
 // CompressChunk compresses a single chunk's uncompressed bytes under ct. dict is
 // the decompressed dictionary (chunk 0); pass nil/empty when compressing the
@@ -24,7 +43,10 @@ func CompressChunk(ct CompressionType, dict, src []byte) ([]byte, error) {
 	if !ct.valid() {
 		return nil, fmt.Errorf("zchunk: unsupported compression type %d", uint64(ct))
 	}
-	ce := newChunkEncoder(ct, dict)
+	ce, err := newChunkEncoder(ct, dict)
+	if err != nil {
+		return nil, err
+	}
 	defer ce.close()
 	return ce.compress(src), nil
 }
@@ -41,18 +63,28 @@ type chunkEncoder struct {
 
 // newChunkEncoder builds an encoder for ct bound to dict (the decompressed
 // dictionary, or nil/empty for none). ct must already be valid; only none and
-// zstd are handled.
-func newChunkEncoder(ct CompressionType, dict []byte) *chunkEncoder {
+// zstd are handled. It fails when a supplied dictionary is malformed (a trained
+// dictionary with an invalid body), since loading it is the only fallible step.
+func newChunkEncoder(ct CompressionType, dict []byte) (*chunkEncoder, error) {
 	ce := &chunkEncoder{ct: ct}
 	if ct == CompressionZstd {
 		opts := []zstd.EOption{zstd.WithEncoderConcurrency(1)}
 		if len(dict) > 0 {
-			opts = append(opts, zstd.WithEncoderDictRaw(0, dict))
+			if isStructuredDict(dict) {
+				opts = append(opts, zstd.WithEncoderDict(dict))
+			} else {
+				opts = append(opts, zstd.WithEncoderDictRaw(0, dict))
+			}
 		}
-		// NewWriter only fails on invalid options; ours are static and valid.
-		ce.enc, _ = zstd.NewWriter(nil, opts...)
+		// With a dictionary, NewWriter validates it and may fail; without one our
+		// options are static and valid.
+		enc, err := zstd.NewWriter(nil, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("zchunk: load compression dictionary: %w", err)
+		}
+		ce.enc = enc
 	}
-	return ce
+	return ce, nil
 }
 
 // compress encodes one chunk's bytes (verbatim for none, one zstd frame
@@ -84,18 +116,29 @@ type chunkDecoder struct {
 
 // newChunkDecoder builds a decoder for ct bound to dict (the decompressed
 // dictionary, or nil/empty for none). ct must already be valid (see
-// CompressionType.valid); only none and zstd are handled.
-func newChunkDecoder(ct CompressionType, dict []byte) *chunkDecoder {
+// CompressionType.valid); only none and zstd are handled. It fails when a
+// supplied dictionary is malformed (a trained dictionary with an invalid body),
+// since loading it is the only fallible step.
+func newChunkDecoder(ct CompressionType, dict []byte) (*chunkDecoder, error) {
 	cd := &chunkDecoder{ct: ct}
 	if ct == CompressionZstd {
 		opts := []zstd.DOption{zstd.WithDecoderConcurrency(1)}
 		if len(dict) > 0 {
-			opts = append(opts, zstd.WithDecoderDictRaw(0, dict))
+			if isStructuredDict(dict) {
+				opts = append(opts, zstd.WithDecoderDicts(dict))
+			} else {
+				opts = append(opts, zstd.WithDecoderDictRaw(0, dict))
+			}
 		}
-		// NewReader only fails on invalid options; ours are static and valid.
-		cd.dec, _ = zstd.NewReader(nil, opts...)
+		// With a dictionary, NewReader validates it and may fail; without one our
+		// options are static and valid.
+		dec, err := zstd.NewReader(nil, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("zchunk: load compression dictionary: %w", err)
+		}
+		cd.dec = dec
 	}
-	return cd
+	return cd, nil
 }
 
 // decompress reverses one chunk's compression; the result must be exactly
@@ -137,7 +180,10 @@ func DecompressChunk(ct CompressionType, dict, src []byte, decompressedLen uint6
 	if !ct.valid() {
 		return nil, fmt.Errorf("zchunk: unsupported compression type %d", uint64(ct))
 	}
-	cd := newChunkDecoder(ct, dict)
+	cd, err := newChunkDecoder(ct, dict)
+	if err != nil {
+		return nil, err
+	}
 	defer cd.close()
 	return cd.decompress(src, decompressedLen)
 }

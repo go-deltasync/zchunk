@@ -35,8 +35,12 @@ func NewBuilder(ct CompressionType, chunkChecksum ChecksumType, dict []byte) (*B
 	if err != nil {
 		return nil, err
 	}
+	enc, err := newChunkEncoder(ct, dict)
+	if err != nil {
+		return nil, err
+	}
 	b := &Builder{
-		enc: newChunkEncoder(ct, dict),
+		enc: enc,
 		idx: &Index{ChunkChecksumType: chunkChecksum},
 	}
 	if len(dict) == 0 {

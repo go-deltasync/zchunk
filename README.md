@@ -38,9 +38,13 @@ on-the-wire compatibility with the C `zck` tooling.
     `Signatures.WriteTo`): the signature count, rejecting any non-zero value
     since no signature type is defined yet (matching the reference).
   - the **chunk codec** (`CompressChunk` / `DecompressChunk`): per-chunk
-    `none`/`zstd` (de)compression via the pure-Go `klauspost/compress`, including
-    raw-dictionary support so chunks can be coded against chunk 0 (the dict),
-    matching the reference's `ZSTD_compress_usingDict`.
+    `none`/`zstd` (de)compression via the pure-Go `klauspost/compress`, coding
+    chunks against chunk 0 (the dict) the way the reference does via
+    `ZSTD_compress_usingDict` — in zstd's *auto* mode, so a **trained**
+    dictionary (the structured `zstd --train` / `zck_gen_zdict` artifact,
+    recognised by its magic) is loaded with its entropy tables and dictID while
+    any other bytes are used as a raw content prefix. This is what lets us decode
+    reference `zck -D` files and emit dict-based files the reference reads back.
   - the **checksum registry's hashing** (`ChecksumType.Sum`): SHA-1 / SHA-256 /
     SHA-512 / SHA-512-128 digests (the last being SHA-512 truncated to 16 bytes,
     per the reference);
@@ -81,9 +85,12 @@ on-the-wire compatibility with the C `zck` tooling.
     is computed with the embedded magic substituted, so a client can fetch the
     small header on its own and learn a file's chunk layout — accepted by the
     reference's `zck_read_header`.
-- `zchunk create [--chunk-size N] [--compression none|zstd] FILE OUT`: builds a
-  zchunk file from FILE using fixed-size chunks (SHA-256), producing output that
-  extracts with `zchunk extract` and decompresses with the reference `unzck`.
+- `zchunk create [--chunk-size N] [--compression none|zstd] [--dict FILE] FILE OUT`:
+  builds a zchunk file from FILE using fixed-size chunks (SHA-256), producing
+  output that extracts with `zchunk extract` and decompresses with the reference
+  `unzck`. With `--dict`, the trained zstd dictionary at that path (see
+  `gen-zdict`) seeds every chunk's compression and is stored as chunk 0, exactly
+  as the reference `zck -D` does — and the result is read back by `unzck`.
 - `zchunk info FILE`: parses and prints a file's lead, preface, index and
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.

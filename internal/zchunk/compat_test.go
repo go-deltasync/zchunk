@@ -301,6 +301,107 @@ func TestCompatGenZdictWithZstd(t *testing.T) {
 	}
 }
 
+// dictCorpus builds content with a recurring shared block (so a trained
+// dictionary applies) and returns it split into fixed-size samples for training.
+func dictCorpus(t *testing.T) (orig []byte, samples [][]byte) {
+	t.Helper()
+	shared := randBytes(t, 8*1024)
+	for i := 0; i < 40; i++ {
+		orig = append(orig, shared...)
+		orig = append(orig, randBytes(t, 256)...)
+	}
+	const chunkSize = 8 * 1024
+	for off := 0; off < len(orig); off += chunkSize {
+		end := off + chunkSize
+		if end > len(orig) {
+			end = len(orig)
+		}
+		samples = append(samples, orig[off:end])
+	}
+	return orig, samples
+}
+
+// TestCompatDictZckToOurExtract trains a dictionary with our GenerateDict, has
+// the C `zck -D` tool build a dict-based file from it, then verifies our reader +
+// Extract reproduce the original — proving we decode the reference's structured
+// (trained-dictionary) frames, whose blocks reference the dictionary's ID.
+func TestCompatDictZckToOurExtract(t *testing.T) {
+	zck := lookTool(t, "zck")
+
+	dir := t.TempDir()
+	orig, samples := dictCorpus(t)
+	dict, err := GenerateDict(samples, 16*1024)
+	if err != nil {
+		t.Fatalf("GenerateDict: %v", err)
+	}
+	dictPath := filepath.Join(dir, "trained.dict")
+	if err := os.WriteFile(dictPath, dict, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(dir, "data.bin")
+	if err := os.WriteFile(src, orig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	zckPath := filepath.Join(dir, "data.zck")
+	if out, err := exec.Command(zck, "-D", dictPath, "-o", zckPath, src).CombinedOutput(); err != nil {
+		t.Fatalf("zck -D failed: %v\n%s", err, out)
+	}
+
+	f, err := os.Open(zckPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if got := extractZck(t, f); !bytes.Equal(got, orig) {
+		t.Fatalf("dict-based zck file extracted incorrectly (got %d bytes, want %d)", len(got), len(orig))
+	}
+}
+
+// TestCompatOurDictFileToUnzck builds a dict-based file with our Builder (trained
+// dictionary as chunk 0, the structured artifact loaded in zstd auto mode) and
+// asks the C `unzck` to decompress it — byte-identical output proves our trained
+// dictionaries and frames are wire-compatible with the reference reader.
+func TestCompatOurDictFileToUnzck(t *testing.T) {
+	unzck := lookTool(t, "unzck")
+
+	dir := t.TempDir()
+	orig, samples := dictCorpus(t)
+	dict, err := GenerateDict(samples, 16*1024)
+	if err != nil {
+		t.Fatalf("GenerateDict: %v", err)
+	}
+	b, err := NewBuilder(CompressionZstd, SHA256, dict)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	defer b.Close()
+	for _, s := range samples {
+		b.AddChunk(s)
+	}
+
+	zckPath := filepath.Join(dir, "ours.zck")
+	f, err := os.Create(zckPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre := &Preface{CompressionType: CompressionZstd}
+	if _, err := b.WriteFile(f, SHA256, pre, nil); err != nil {
+		f.Close()
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := exec.Command(unzck, "-c", zckPath).Output()
+	if err != nil {
+		t.Fatalf("unzck failed: %v", err)
+	}
+	if !bytes.Equal(got, orig) {
+		t.Fatalf("unzck output differs from original (got %d bytes, want %d)", len(got), len(orig))
+	}
+}
+
 // BenchmarkCompatExtract compares our in-process Extract against the C `unzck`
 // tool decompressing the same zck-produced file. The "go" sub-benchmark times
 // pure in-process decode; the "unzck" sub-benchmark times the reference and

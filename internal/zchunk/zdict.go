@@ -44,6 +44,11 @@ func GenerateDict(samples [][]byte, maxDictSize int) ([]byte, error) {
 		ID:       dictID(content),
 		Contents: samples,
 		History:  content,
+		// Seed the dictionary's three repeat offsets with zstd's standard
+		// defaults. Left zero, BuildDict emits offset 0, which is invalid and
+		// makes the encoder reject the dictionary ("invalid offset"); {1,4,8}
+		// keeps even small dictionaries loadable.
+		Offsets: [3]int{1, 4, 8},
 	})
 }
 

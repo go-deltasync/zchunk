@@ -56,6 +56,27 @@ func buildBody(t *testing.T, ck ChecksumType, ct CompressionType, uncompressed b
 	return idx, body.Bytes()
 }
 
+func TestExtractMalformedDictChunk(t *testing.T) {
+	// A corrupt chunk 0 that decompresses to a malformed trained dictionary must
+	// make Extract fail when it binds the data-chunk decoder to that dictionary,
+	// even though decoding chunk 0 itself (with no dictionary) succeeds.
+	bad := malformedDict()
+	comp0, err := CompressChunk(CompressionZstd, nil, bad)
+	if err != nil {
+		t.Fatalf("CompressChunk: %v", err)
+	}
+	d0, err := SHA256.Sum(comp0)
+	if err != nil {
+		t.Fatalf("Sum: %v", err)
+	}
+	idx := &Index{ChunkChecksumType: SHA256, Chunks: []IndexEntry{
+		{Digest: d0, CompLength: uint64(len(comp0)), Length: uint64(len(bad))},
+	}}
+	if _, err := idx.Extract(bytes.NewReader(comp0), CompressionZstd, io.Discard); err == nil {
+		t.Fatal("Extract accepted a malformed dictionary chunk")
+	}
+}
+
 func TestExtractRoundTrip(t *testing.T) {
 	dict := bytes.Repeat([]byte("SHARED-DICTIONARY-CONTENT-"), 16)
 	data := [][]byte{

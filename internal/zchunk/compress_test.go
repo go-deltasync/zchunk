@@ -76,6 +76,73 @@ func TestCompressChunkWithDict(t *testing.T) {
 	}
 }
 
+func TestCompressChunkWithTrainedDict(t *testing.T) {
+	// A trained (structured) zstd dictionary — the artifact GenerateDict and the
+	// reference zck_gen_zdict produce — must be loaded in zstd's auto mode (with
+	// its entropy tables and dictID), not as raw content. Build one, then verify
+	// a chunk round-trips through the structured encode/decode path.
+	shared := bytes.Repeat([]byte("REPEATED-DICTIONARY-MATERIAL-"), 64)
+	samples := make([][]byte, 8)
+	for k := range samples {
+		s := append([]byte(nil), shared...)
+		s = append(s, byte(k), byte(k>>8))
+		samples[k] = s
+	}
+	dict, err := GenerateDict(samples, 4096)
+	if err != nil {
+		t.Fatalf("GenerateDict: %v", err)
+	}
+	if !isStructuredDict(dict) {
+		t.Fatal("GenerateDict did not produce a structured dictionary")
+	}
+
+	src := append(append([]byte(nil), shared...), []byte("-unique-tail")...)
+	comp, err := CompressChunk(CompressionZstd, dict, src)
+	if err != nil {
+		t.Fatalf("CompressChunk(trained dict): %v", err)
+	}
+	got, err := DecompressChunk(CompressionZstd, dict, comp, uint64(len(src)))
+	if err != nil {
+		t.Fatalf("DecompressChunk(trained dict): %v", err)
+	}
+	if !bytes.Equal(got, src) {
+		t.Fatal("trained-dict round-trip mismatch")
+	}
+}
+
+func TestIsStructuredDict(t *testing.T) {
+	if !isStructuredDict([]byte{0x37, 0xA4, 0x30, 0xEC, 0x00}) {
+		t.Fatal("magic-prefixed bytes not recognised as a structured dict")
+	}
+	if isStructuredDict([]byte("raw content")) {
+		t.Fatal("raw content misidentified as a structured dict")
+	}
+	if isStructuredDict([]byte{0x37, 0xA4}) {
+		t.Fatal("too-short input misidentified as a structured dict")
+	}
+}
+
+// malformedDict is the zstd dictionary magic followed by garbage: it passes the
+// structured-dict magic check but fails to load, exercising the dictionary-load
+// error path of the codec constructors.
+func malformedDict() []byte {
+	d := append([]byte(nil), zstdDictMagic...)
+	return append(d, bytes.Repeat([]byte{0xFF}, 40)...)
+}
+
+func TestCompressChunkMalformedDict(t *testing.T) {
+	bad := malformedDict()
+	if !isStructuredDict(bad) {
+		t.Fatal("test fixture is not magic-prefixed")
+	}
+	if _, err := CompressChunk(CompressionZstd, bad, []byte("x")); err == nil {
+		t.Fatal("CompressChunk accepted a malformed dictionary")
+	}
+	if _, err := DecompressChunk(CompressionZstd, bad, []byte("x"), 1); err == nil {
+		t.Fatal("DecompressChunk accepted a malformed dictionary")
+	}
+}
+
 func TestCompressChunkUnsupportedType(t *testing.T) {
 	if _, err := CompressChunk(CompressionType(1), nil, []byte("x")); err == nil {
 		t.Fatal("CompressChunk accepted unsupported type")

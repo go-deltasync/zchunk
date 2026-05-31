@@ -28,8 +28,9 @@ func (idx *Index) Extract(r io.Reader, ct CompressionType, out io.Writer) (int64
 
 	// Chunk 0 is the dictionary; decompress it (with no dictionary of its own)
 	// for use as the zstd dictionary of the remaining chunks. An empty dict
-	// (zero lengths, conventionally an all-zero digest) yields nil.
-	dictDec := newChunkDecoder(ct, nil)
+	// (zero lengths, conventionally an all-zero digest) yields nil. With no
+	// dictionary of its own, constructing this decoder cannot fail.
+	dictDec, _ := newChunkDecoder(ct, nil)
 	dict, comp, err := idx.readChunk(r, dictDec, idx.Chunks[0], 0, nil)
 	dictDec.close()
 	if err != nil {
@@ -40,7 +41,12 @@ func (idx *Index) Extract(r io.Reader, ct CompressionType, out io.Writer) (int64
 	// instead of constructing one per chunk (as the reference reuses one DCtx).
 	// comp is the compressed-read scratch, grown to the largest chunk and reused
 	// across iterations; the decoder reuses its own decode destination likewise.
-	dec := newChunkDecoder(ct, dict)
+	// A corrupt chunk 0 can decompress to a malformed dictionary, so this can
+	// fail even when the dictionary decoder above did not.
+	dec, err := newChunkDecoder(ct, dict)
+	if err != nil {
+		return 0, err
+	}
 	defer dec.close()
 	var written int64
 	for i := 1; i < len(idx.Chunks); i++ {

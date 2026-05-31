@@ -204,6 +204,7 @@ func reportDeltaSize(out io.Writer, url string, plan *zchunk.DeltaPlan) error {
 func createCmd() *cobra.Command {
 	var chunkSize int
 	var compression string
+	var dictPath string
 	cmd := &cobra.Command{
 		Use:   "create [flags] FILE OUT",
 		Short: "Build a zchunk file from FILE, writing it to OUT",
@@ -211,7 +212,9 @@ func createCmd() *cobra.Command {
 			"complete zchunk file (lead, preface, index, signatures, body) to OUT. " +
 			"The result extracts with `zchunk extract` and decompresses with the " +
 			"reference `unzck`. Chunking is fixed-size; content-defined chunking " +
-			"lands with the shared chunker module.",
+			"lands with the shared chunker module. With --dict, the trained zstd " +
+			"dictionary at that path (see `zchunk gen-zdict`) seeds every chunk's " +
+			"compression — the same as the reference `zck -D`.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ct, err := parseCompression(compression)
@@ -220,6 +223,13 @@ func createCmd() *cobra.Command {
 			}
 			if chunkSize <= 0 {
 				return fmt.Errorf("--chunk-size must be positive, got %d", chunkSize)
+			}
+			var dict []byte
+			if dictPath != "" {
+				dict, err = os.ReadFile(dictPath)
+				if err != nil {
+					return fmt.Errorf("read dictionary %s: %w", dictPath, err)
+				}
 			}
 			f, err := os.Open(args[0])
 			if err != nil {
@@ -231,7 +241,7 @@ func createCmd() *cobra.Command {
 				return fmt.Errorf("create %s: %w", args[1], err)
 			}
 			defer out.Close()
-			if err := create(f, out, chunkSize, ct); err != nil {
+			if err := create(f, out, chunkSize, ct, dict); err != nil {
 				return err
 			}
 			return out.Close()
@@ -239,14 +249,15 @@ func createCmd() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&chunkSize, "chunk-size", 64*1024, "fixed chunk size in bytes")
 	cmd.Flags().StringVar(&compression, "compression", "zstd", "chunk compression: none or zstd")
+	cmd.Flags().StringVar(&dictPath, "dict", "", "trained zstd dictionary to seed compression (from `zchunk gen-zdict`)")
 	return cmd
 }
 
 // create reads in in fixed-size chunks, compressing each through a single reused
-// encoder (an empty dictionary), and writes a complete zchunk file to out with
-// SHA-256 checksums.
-func create(in io.Reader, out io.Writer, chunkSize int, ct zchunk.CompressionType) error {
-	b, err := zchunk.NewBuilder(ct, zchunk.SHA256, nil)
+// encoder bound to dict (the file's dictionary, or nil for none), and writes a
+// complete zchunk file to out with SHA-256 checksums.
+func create(in io.Reader, out io.Writer, chunkSize int, ct zchunk.CompressionType, dict []byte) error {
+	b, err := zchunk.NewBuilder(ct, zchunk.SHA256, dict)
 	if err != nil {
 		return err
 	}
