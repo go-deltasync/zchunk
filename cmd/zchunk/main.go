@@ -4,8 +4,9 @@
 //
 // Commands: `create` builds a .zck file from a plain input; `extract`
 // reconstructs the content; `info` reports a file's lead/preface/index;
-// `header` emits a standalone detached header; and `download` delta-downloads a
-// remote file over HTTP range requests, reusing chunks from a local copy.
+// `header` emits a standalone detached header; `download` delta-downloads a
+// remote file over HTTP range requests, reusing chunks from a local copy; and
+// `gen-zdict` trains a zstd dictionary from a file's chunks.
 package main
 
 import (
@@ -42,7 +43,99 @@ func newRoot() *cobra.Command {
 	root.AddCommand(downloadCmd())
 	root.AddCommand(headerCmd())
 	root.AddCommand(deltaSizeCmd())
+	root.AddCommand(genZdictCmd())
 	return root
+}
+
+// defaultMaxDictSize bounds the trained dictionary's content. It matches zstd's
+// own default (`zstd --maxdict`, 112640 bytes), so our output is sized like the
+// reference `zck_gen_zdict`'s.
+const defaultMaxDictSize = 112640
+
+func genZdictCmd() *cobra.Command {
+	var maxSize int
+	cmd := &cobra.Command{
+		Use:   "gen-zdict [flags] FILE OUT",
+		Short: "Train a zstd dictionary from FILE's chunks, writing it to OUT",
+		Long: "Decompress FILE's chunks and train a standard zstd dictionary from " +
+			"them, writing it to OUT. The result is the same artifact `zstd --train` " +
+			"and the reference `zck_gen_zdict` produce — usable by `zstd -D` and `zck " +
+			"--dict`. Content selection is a pure-Go, cgo-free fastCover-style " +
+			"selector (the reference shells out to `zstd --train`).",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if maxSize <= 0 {
+				return fmt.Errorf("--max-size must be positive, got %d", maxSize)
+			}
+			samples, err := collectChunkSamples(args[0])
+			if err != nil {
+				return err
+			}
+			dict, err := zchunk.GenerateDict(samples, maxSize)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(args[1], dict, 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", args[1], err)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&maxSize, "max-size", defaultMaxDictSize, "maximum dictionary content size in bytes")
+	return cmd
+}
+
+// collectChunkSamples opens the zchunk file at path and returns its decompressed
+// data chunks (chunk 0, the dictionary, is excluded) to train a dictionary from,
+// mirroring how the reference `zck_gen_zdict` feeds a file's chunks to training.
+func collectChunkSamples(path string) ([][]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	lead, err := zchunk.ReadLead(f)
+	if err != nil {
+		return nil, err
+	}
+	pre, err := zchunk.ReadPreface(f, lead.ChecksumType)
+	if err != nil {
+		return nil, err
+	}
+	idx, err := zchunk.ReadIndex(f, pre.UncompressedSource())
+	if err != nil {
+		return nil, err
+	}
+	if _, err := zchunk.ReadSignatures(f); err != nil {
+		return nil, err
+	}
+
+	// The body follows the header; read chunk 0 (the dictionary) first so the
+	// data chunks decompress against it, then keep every decompressed data chunk.
+	var dict []byte
+	if len(idx.Chunks) > 0 {
+		raw := make([]byte, idx.Chunks[0].CompLength)
+		if _, err := io.ReadFull(f, raw); err != nil {
+			return nil, fmt.Errorf("read dictionary chunk: %w", err)
+		}
+		dict, err = zchunk.DecompressChunk(pre.CompressionType, nil, raw, idx.Chunks[0].Length)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var samples [][]byte
+	for i := 1; i < len(idx.Chunks); i++ {
+		raw := make([]byte, idx.Chunks[i].CompLength)
+		if _, err := io.ReadFull(f, raw); err != nil {
+			return nil, fmt.Errorf("read chunk %d: %w", i, err)
+		}
+		data, err := zchunk.DecompressChunk(pre.CompressionType, dict, raw, idx.Chunks[i].Length)
+		if err != nil {
+			return nil, err
+		}
+		samples = append(samples, data)
+	}
+	return samples, nil
 }
 
 func deltaSizeCmd() *cobra.Command {

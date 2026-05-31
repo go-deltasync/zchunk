@@ -250,6 +250,57 @@ func TestCompatOurFileToUnzck(t *testing.T) {
 	}
 }
 
+// TestCompatGenZdictWithZstd trains a dictionary from a corpus of similar
+// samples with our pure-Go GenerateDict, then asks the real `zstd` CLI to
+// compress and decompress a sample with `-D ourdict`. A byte-identical
+// round-trip proves we emit a standard zstd dictionary the reference toolchain
+// accepts — the same artifact `zstd --train` / `zck_gen_zdict` produce.
+func TestCompatGenZdictWithZstd(t *testing.T) {
+	zstdCLI := lookTool(t, "zstd")
+
+	// A shared, structured block recurs across every sample so training has real
+	// content to select; each sample then diverges with its own random tail.
+	shared := randBytes(t, 4096)
+	const n, size = 8, 32 * 1024
+	samples := make([][]byte, n)
+	for k := range samples {
+		s := append([]byte(nil), shared...)
+		s = append(s, randBytes(t, size-len(shared))...)
+		samples[k] = s
+	}
+
+	dict, err := GenerateDict(samples, 16*1024)
+	if err != nil {
+		t.Fatalf("GenerateDict: %v", err)
+	}
+
+	dir := t.TempDir()
+	dictPath := filepath.Join(dir, "trained.dict")
+	if err := os.WriteFile(dictPath, dict, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srcPath := filepath.Join(dir, "sample.bin")
+	if err := os.WriteFile(srcPath, samples[0], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	zstPath := filepath.Join(dir, "sample.zst")
+	outPath := filepath.Join(dir, "sample.out")
+
+	if out, err := exec.Command(zstdCLI, "-q", "-f", "-D", dictPath, "-o", zstPath, srcPath).CombinedOutput(); err != nil {
+		t.Fatalf("zstd compress with -D failed: %v\n%s", err, out)
+	}
+	if out, err := exec.Command(zstdCLI, "-q", "-f", "-d", "-D", dictPath, "-o", outPath, zstPath).CombinedOutput(); err != nil {
+		t.Fatalf("zstd decompress with -D failed: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, samples[0]) {
+		t.Fatalf("round-trip through zstd -D differs (got %d bytes, want %d)", len(got), len(samples[0]))
+	}
+}
+
 // BenchmarkCompatExtract compares our in-process Extract against the C `unzck`
 // tool decompressing the same zck-produced file. The "go" sub-benchmark times
 // pure in-process decode; the "unzck" sub-benchmark times the reference and

@@ -70,6 +70,12 @@ on-the-wire compatibility with the C `zck` tooling.
     whole-file data checksum (skipped for an uncompressed-source file, where the
     reference suppresses it), catching any inconsistency the per-chunk digests
     would miss.
+  - **zstd dictionary training** (`GenerateDict`): builds a standard zstd
+    dictionary from a set of samples (a file's decompressed chunks) with a
+    pure-Go, cgo-free fastCover-style content selector — frequency-scored
+    fixed-length segments picked greedily to a target size — then finalises it
+    (entropy tables, repeat offsets, dictionary ID) via the `klauspost/compress`
+    builder. The result is accepted by the reference `zstd -D` / `zck --dict`.
   - **detached headers** (`WriteDetachedHeader` / `ReadDetachedHeader`): writes
     and reads a standalone header (the `\0ZHR1` magic, no body) whose checksum
     is computed with the embedded magic substituted, so a client can fetch the
@@ -87,6 +93,12 @@ on-the-wire compatibility with the C `zck` tooling.
 - `zchunk delta-size [--local FILE] URL`: reports how many compressed bytes a
   delta download of URL would reuse locally versus fetch over the network,
   without downloading anything (the analogue of the reference `zck_delta_size`).
+- `zchunk gen-zdict [--max-size N] FILE OUT`: trains a standard zstd dictionary
+  from FILE's decompressed chunks and writes it to OUT — the same artifact
+  `zstd --train` / `zck_gen_zdict` produce, usable by `zstd -D` and `zck --dict`.
+  Content selection is a pure-Go, cgo-free fastCover-style selector (the
+  reference shells out to `zstd --train`), finalised into a real dictionary by
+  the `klauspost/compress` builder.
 - `zchunk --version`.
 
 The binary layout follows the canonical `zchunk_format.txt` from the reference
