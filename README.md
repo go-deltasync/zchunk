@@ -95,8 +95,11 @@ on-the-wire compatibility with the C `zck` tooling.
   signature count.
 - `zchunk extract FILE OUT`: reconstructs a zchunk file's content into OUT.
 - `zchunk header FILE OUT`: writes FILE's header on its own as a detached header.
-- `zchunk download [--local FILE] URL OUT`: delta-downloads URL into OUT,
-  reusing chunks from a local copy and fetching only the rest over HTTP range.
+- `zchunk download [--local FILE] [--header FILE] URL OUT`: delta-downloads URL
+  into OUT, reusing chunks from a local copy and fetching only the rest over HTTP
+  range. With `--header`, the chunk layout is read from a detached header fetched
+  earlier (see `zchunk header`) instead of with range requests to URL, so only
+  the body is fetched — driving the download via `DownloadDeltaWithHeader`.
 - `zchunk delta-size [--local FILE] URL`: reports how many compressed bytes a
   delta download of URL would reuse locally versus fetch over the network,
   without downloading anything (the analogue of the reference `zck_delta_size`).

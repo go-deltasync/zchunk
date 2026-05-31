@@ -344,11 +344,15 @@ func writeDetachedHeader(inPath, outPath string) error {
 
 func downloadCmd() *cobra.Command {
 	var localPath string
+	var headerPath string
 	cmd := &cobra.Command{
-		Use:   "download URL OUT",
+		Use:   "download [flags] URL OUT",
 		Short: "Delta-download URL into OUT, reusing chunks from a local copy",
 		Long: "Fetch the remote zchunk file at URL into OUT over HTTP range requests, " +
-			"reusing any chunks already present in the --local copy and fetching only the rest.",
+			"reusing any chunks already present in the --local copy and fetching only " +
+			"the rest. With --header, the chunk layout is read from a detached header " +
+			"file fetched earlier (see `zchunk header`) instead of with two range " +
+			"requests to URL, so only the body is fetched.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			url, outPath := args[0], args[1]
@@ -371,6 +375,16 @@ func downloadCmd() *cobra.Command {
 			defer out.Close()
 
 			remote := zchunk.NewHTTPRangeReader(url, 0, nil)
+			if headerPath != "" {
+				rh, err := readDetachedHeaderFile(headerPath)
+				if err != nil {
+					return err
+				}
+				if _, err := zchunk.DownloadDeltaWithHeader(rh, remote, localIndex, localBody, out); err != nil {
+					return err
+				}
+				return out.Close()
+			}
 			if _, err := zchunk.DownloadDelta(remote, localIndex, localBody, out); err != nil {
 				return err
 			}
@@ -378,7 +392,18 @@ func downloadCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&localPath, "local", "", "existing local zchunk file to reuse chunks from")
+	cmd.Flags().StringVar(&headerPath, "header", "", "detached header file describing URL's chunk layout (see `zchunk header`)")
 	return cmd
+}
+
+// readDetachedHeaderFile reads and verifies the detached header at path.
+func readDetachedHeaderFile(path string) (*zchunk.RemoteHeader, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open header %s: %w", path, err)
+	}
+	defer f.Close()
+	return zchunk.ReadDetachedHeader(f)
 }
 
 // openLocal opens a local zchunk file and returns its index and a ReaderAt over
