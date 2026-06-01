@@ -1,5 +1,12 @@
 # zchunk
 
+[![ci](https://github.com/go-deltasync/zchunk/actions/workflows/ci.yml/badge.svg)](https://github.com/go-deltasync/zchunk/actions/workflows/ci.yml)
+[![compat](https://github.com/go-deltasync/zchunk/actions/workflows/compat.yml/badge.svg)](https://github.com/go-deltasync/zchunk/actions/workflows/compat.yml)
+[![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/go-deltasync/zchunk/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/go-deltasync/zchunk.svg)](https://pkg.go.dev/github.com/go-deltasync/zchunk)
+[![Go version](https://img.shields.io/github/go-mod/go-version/go-deltasync/zchunk)](go.mod)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
+
 A pure-Go, cross-platform toolkit for the [zchunk](https://github.com/zchunk/zchunk)
 file format — a content-defined-chunked container that enables **delta
 downloads**: a client fetches only the chunks it is missing over HTTP range
