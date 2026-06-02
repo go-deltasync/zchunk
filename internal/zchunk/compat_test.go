@@ -344,6 +344,15 @@ func TestCompatDictZckToOurExtract(t *testing.T) {
 	}
 	zckPath := filepath.Join(dir, "data.zck")
 	if out, err := exec.Command(zck, "-D", dictPath, "-o", zckPath, src).CombinedOutput(); err != nil {
+		// Older distro builds of zck (as installed on CI) abort dictionary
+		// compression with an out-of-memory error from their bundled libzstd.
+		// We can't control the reference tool's build, so treat that as a skip
+		// — the reverse direction (our dict archives read by unzck) is still
+		// verified by TestCompatOurDictFileToUnzck.
+		low := bytes.ToLower(out)
+		if bytes.Contains(low, []byte("not enough memory")) || bytes.Contains(low, []byte("allocation error")) {
+			t.Skipf("reference zck cannot build a dictionary archive in this environment: %s", bytes.TrimSpace(out))
+		}
 		t.Fatalf("zck -D failed: %v\n%s", err, out)
 	}
 
