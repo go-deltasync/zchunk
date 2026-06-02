@@ -211,6 +211,18 @@ Part of the [go-deltasync](https://github.com/go-deltasync) org: single static
 binary, no cgo, BSD-3-Clause, cobra CLI, and **100 % test coverage on the
 library package** (CI-enforced). See the org docs for details.
 
+## Library
+
+Importable for use in other Go programs (pure Go, no cgo):
+
+```go
+import "github.com/go-deltasync/zchunk"
+
+// build a .zck with a Builder, read structure with ReadLead/ReadPreface/ReadIndex,
+// and delta-download with PlanDelta + DownloadDelta over a RangeReader.
+comp, _ := zchunk.CompressChunk(zchunk.CompressionZstd, nil, data)
+```
+
 ## License
 
 BSD-3-Clause. See [LICENSE](LICENSE).
