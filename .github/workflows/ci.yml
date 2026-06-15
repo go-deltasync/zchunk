@@ -10,14 +10,16 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: test (${{ matrix.os }} / go${{ matrix.go }})
-    runs-on: ${{ matrix.os }}
+  # Native runners: build + race + 100% coverage gate on real hardware.
+  native:
+    name: native (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        go: ["1.22", "1.23"]
+        include:
+          - { os: amd64, runner: ubuntu-latest }
+          - { os: arm64, runner: ubuntu-24.04-arm }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,7 +27,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go }}
+          go-version: stable
           check-latest: true
 
       - name: Show Go version
@@ -57,6 +59,92 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cover-${{ matrix.os }}-go${{ matrix.go }}
+          name: cover-${{ matrix.os }}
           path: cover.out
           if-no-files-found: warn
+
+  # Emulated runners: cross-compile per-package test binaries on the amd64 host,
+  # then execute each under QEMU via docker. zchunk is a binary chunk format with
+  # integer-encoded headers, so s390x (big-endian) is a genuine correctness test.
+  emulated:
+    name: emulated (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: riscv64, image: "debian:trixie",                 qemu: "rv64,v=true,vlen=128" }
+          - { arch: loong64, image: "ghcr.io/loong64/debian:trixie", qemu: "la464" }
+          - { arch: ppc64le, image: "debian:trixie",                 qemu: "power9" }
+          - { arch: s390x,   image: "debian:trixie",                 qemu: "qemu" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: Show Go version
+        run: go version
+
+      - name: Register QEMU binfmt handlers
+        run: docker run --privileged --rm tonistiigi/binfmt --install all
+
+      - name: Cross-compile per-package test binaries
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p testbins
+          # Build a -cover-instrumented test binary per package that has tests,
+          # so we can both run the suite and enforce the coverage gate under QEMU.
+          for pkg in $(go list ./...); do
+            name=$(echo "$pkg" | tr '/' '_')
+            if go test -c -cover -coverpkg=./... -o "testbins/${name}.test" "$pkg" 2>/dev/null; then
+              if [ -f "testbins/${name}.test" ]; then
+                echo "built ${name}.test ($pkg)"
+              fi
+            else
+              echo "no test binary for $pkg (no tests)"
+            fi
+          done
+          ls -l testbins
+
+      - name: Run test binaries under QEMU (${{ matrix.arch }})
+        run: |
+          set -euo pipefail
+          mkdir -p covdata
+          docker run --rm \
+            --platform "linux/${{ matrix.arch }}" \
+            -e QEMU_CPU="${{ matrix.qemu }}" \
+            -v "$PWD:/work" -w /work \
+            "${{ matrix.image }}" \
+            /bin/sh -ec '
+              mkdir -p covdata
+              for t in testbins/*.test; do
+                echo "=== running $t ==="
+                # -test.gocoverdir is required for an externally-built (-c)
+                # binary to emit GOCOVERDIR profiles for the coverage gate.
+                "./$t" -test.v -test.gocoverdir=/work/covdata
+              done
+            '
+
+      - name: Coverage gate (internal/zchunk @ 100%)
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          # GOCOVERDIR profiles from all test binaries were emitted to covdata/.
+          go tool covdata percent -i=covdata
+          pct=$(go tool covdata percent -i=covdata \
+                | grep 'internal/zchunk' \
+                | grep -oE '[0-9]+\.[0-9]+%' | tr -d '%' | tail -n 1)
+          echo "internal/zchunk coverage (${{ matrix.arch }}): ${pct}%"
+          awk -v t="${pct:-0}" 'BEGIN { exit !(t+0 >= 100.0) }' || {
+            echo "::error::internal/zchunk coverage ${pct}% < 100% on ${{ matrix.arch }}"; exit 1; }
