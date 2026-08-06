@@ -1,6 +1,6 @@
 module github.com/go-deltasync/zchunk
 
-go 1.22
+go 1.26.4
 
 require (
 	github.com/klauspost/compress v1.18.0
