@@ -95,14 +95,14 @@ func TestReadPrefaceErrors(t *testing.T) {
 	}
 
 	cases := []struct {
-		name   string
-		ct     ChecksumType
-		data   []byte
+		name string
+		ct   ChecksumType
+		data []byte
 	}{
 		{"unknown-checksum-type", ChecksumType(99), nil},
 		{"truncated-data-checksum", SHA256, sum[:10]},
 		{"flags-read-error", SHA256, sum},
-		{"unknown-flags", SHA256, concat(sum, ci(1 << 5))},
+		{"unknown-flags", SHA256, concat(sum, ci(1<<5))},
 		{"compression-read-error", SHA256, concat(sum, ci(0))},
 		{"unknown-compression", SHA256, concat(sum, ci(0), ci(1))},
 		{"optional-count-error", SHA256, concat(sum, ci(FlagOptionalElements), ci(uint64(CompressionZstd)))},
