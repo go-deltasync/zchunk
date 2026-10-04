@@ -156,8 +156,8 @@ func TestBestSegmentSkipsShortSamples(t *testing.T) {
 	}
 	// A sample shorter than dmerLen must be skipped entirely; a sample between
 	// dmerLen and segLen must be scored with a shortened window.
-	short := []byte("xy")               // < dmerLen, skipped
-	mid := long[:dmerLen+4]             // dmerLen..segLen, window = len(mid)
+	short := []byte("xy")   // < dmerLen, skipped
+	mid := long[:dmerLen+4] // dmerLen..segLen, window = len(mid)
 	seg, score := bestSegment([][]byte{short, mid, long}, freq, defaultSegLen)
 	if score == 0 || len(seg) == 0 {
 		t.Fatal("expected a positive-scoring segment")

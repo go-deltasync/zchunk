@@ -168,11 +168,11 @@ func leadBytes(t *testing.T, magic string, ct ChecksumType, headerSize uint64, f
 
 func TestLeadRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		magic   string
-		det     bool
-		ct      ChecksumType
-		hsize   uint64
+		name  string
+		magic string
+		det   bool
+		ct    ChecksumType
+		hsize uint64
 	}{
 		{"zck1-sha256", Magic, false, SHA256, 4096},
 		{"detached-sha1", DetachedMagic, true, SHA1, 0x123456},
@@ -206,10 +206,10 @@ func TestReadLeadErrors(t *testing.T) {
 	}{
 		{"short-id", []byte{0x00, 'Z'}},
 		{"bad-magic", []byte("HELLO")},
-		{"truncated-checksum-type", []byte(Magic)},                      // EOF reading type
+		{"truncated-checksum-type", []byte(Magic)}, // EOF reading type
 		{"unknown-checksum-type", append([]byte(Magic), AppendCompressedInt(nil, 99)...)},
 		{"truncated-header-size", append([]byte(Magic), AppendCompressedInt(nil, uint64(SHA256))...)},
-		{"truncated-header-checksum", good[:len(good)-1]},               // one digest byte short
+		{"truncated-header-checksum", good[:len(good)-1]}, // one digest byte short
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
